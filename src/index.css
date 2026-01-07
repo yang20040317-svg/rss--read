@@ -1,0 +1,407 @@
+/* 引入 Google Fonts - 中文衬线字体 + 英文优雅字体 */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Playfair+Display:wght@400;500;600;700&family=Source+Sans+3:wght@300;400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =====================================================
+   阅读笔记工具 - 温暖纸质风设计系统
+   ===================================================== */
+
+:root {
+  /* --- 背景色系 - 温暖纸质 --- */
+  --bg-primary: #FAF7F2;
+  /* 主背景：米白 */
+  --bg-secondary: #F5F1EB;
+  /* 次级背景：略深米色 */
+  --bg-card: #FFFFFF;
+  /* 卡片背景：纯白 */
+  --bg-sidebar: #F0EBE3;
+  /* 侧边栏：暖灰 */
+  --bg-hover: #EDE8E0;
+  /* 悬停背景 */
+
+  /* --- 文字色系 --- */
+  --text-primary: #2C2416;
+  /* 主文字：深棕 */
+  --text-secondary: #6B5D4D;
+  /* 次级文字：中棕 */
+  --text-tertiary: #9A8C7B;
+  /* 辅助文字：浅棕 */
+  --text-muted: #B8A99A;
+  /* 更淡的文字 */
+
+  /* --- 强调色系 - Sepia/暖色调 --- */
+  --accent-primary: #C09464;
+  /* 主强调：金棕色 */
+  --accent-secondary: #E8D5B7;
+  /* 次强调：淡金 */
+  --accent-hover: #A87D4F;
+  /* 强调悬停 */
+  --accent-success: #7CAE7A;
+  /* 成功：橄榄绿 */
+  --accent-warning: #E5A853;
+  /* 警告：琥珀 */
+  --accent-error: #C85A5A;
+  /* 错误：暗红 */
+  --accent-info: #6B9AC4;
+  /* 信息：柔和蓝 */
+
+  /* --- 边框色系 --- */
+  --border-light: #E8E1D6;
+  /* 浅边框 */
+  --border-medium: #D4C9BA;
+  /* 中边框 */
+  --border-focus: #C09464;
+  /* 聚焦边框 */
+
+  /* --- 阴影系统 --- */
+  --shadow-sm: 0 1px 3px rgba(44, 36, 22, 0.04);
+  --shadow-md: 0 2px 8px rgba(44, 36, 22, 0.08);
+  --shadow-lg: 0 4px 16px rgba(44, 36, 22, 0.12);
+  --shadow-xl: 0 8px 24px rgba(44, 36, 22, 0.16);
+
+  /* --- 圆角系统 --- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 9999px;
+}
+
+/* =====================================================
+   全局基础样式
+   ===================================================== */
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Source Sans 3', 'Noto Serif SC', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* --- 标题使用衬线字体 --- */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: 'Noto Serif SC', 'Playfair Display', Georgia, serif;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* =====================================================
+   自定义 Tailwind 扩展类
+   ===================================================== */
+
+@layer utilities {
+
+  /* 纸质纹理背景 */
+  .bg-paper {
+    background-color: var(--bg-primary);
+    background-image:
+      linear-gradient(90deg, rgba(44, 36, 22, 0.01) 1px, transparent 1px),
+      linear-gradient(rgba(44, 36, 22, 0.01) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+
+  /* 卡片悬停效果 */
+  .card-hover {
+    transition: all 0.2s ease;
+  }
+
+  .card-hover:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* 阅读专注模式文本 */
+  .reading-text {
+    font-family: 'Noto Serif SC', Georgia, serif;
+    line-height: 1.8;
+    letter-spacing: 0.02em;
+  }
+
+  /* 引用样式 */
+  .quote-style {
+    position: relative;
+    padding-left: 1.5rem;
+    font-style: italic;
+    color: var(--text-secondary);
+  }
+
+  .quote-style::before {
+    content: '"';
+    position: absolute;
+    left: 0;
+    top: -0.5rem;
+    font-size: 3rem;
+    font-family: 'Playfair Display', Georgia, serif;
+    color: var(--accent-secondary);
+    line-height: 1;
+  }
+
+  /* 金句高亮背景 */
+  .highlight-quote {
+    background: linear-gradient(120deg, var(--accent-secondary) 0%, transparent 100%);
+    padding: 0.1em 0.2em;
+    border-radius: 2px;
+  }
+}
+
+/* =====================================================
+   滚动条美化
+   ===================================================== */
+
+/* Webkit 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-medium);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+/* Firefox 滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-medium) var(--bg-secondary);
+}
+
+/* =====================================================
+   动画关键帧
+   ===================================================== */
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-warm {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-pulse-warm {
+  animation: pulse-warm 2s ease-in-out infinite;
+}
+
+/* =====================================================
+   表单元素美化
+   ===================================================== */
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(192, 148, 100, 0.15);
+}
+
+/* Placeholder 样式 */
+::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/* =====================================================
+   原文内容区域排版样式
+   ===================================================== */
+
+.original-article-content {
+  font-family: 'Noto Serif SC', 'Songti SC', Georgia, serif;
+  font-size: 17px;
+  line-height: 1.9;
+  color: var(--text-primary);
+}
+
+.original-article-content p {
+  margin-bottom: 1.6em;
+  text-align: justify;
+}
+
+.original-article-content h1,
+.original-article-content h2,
+.original-article-content h3,
+.original-article-content h4 {
+  font-family: 'Noto Serif SC', serif;
+  font-weight: 600;
+  color: #1A1A1A;
+  margin: 2em 0 1em;
+  line-height: 1.4;
+}
+
+.original-article-content h1 {
+  font-size: 28px;
+  margin-top: 0;
+}
+
+.original-article-content h2 {
+  font-size: 22px;
+  padding-left: 14px;
+  border-left: 3px solid var(--accent-primary);
+}
+
+.original-article-content h3 {
+  font-size: 18px;
+}
+
+.original-article-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 2em auto;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.original-article-content a {
+  color: var(--accent-primary);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s;
+}
+
+.original-article-content a:hover {
+  border-bottom-color: var(--accent-primary);
+}
+
+.original-article-content blockquote {
+  margin: 2em 0;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, #FDF8F3 0%, #FAF5EE 100%);
+  border-left: 3px solid var(--accent-primary);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+.original-article-content blockquote p {
+  margin-bottom: 0;
+}
+
+.original-article-content ul,
+.original-article-content ol {
+  margin: 1.5em 0;
+  padding-left: 2em;
+}
+
+.original-article-content li {
+  margin-bottom: 0.8em;
+}
+
+.original-article-content code {
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-size: 0.9em;
+  background: var(--bg-secondary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--accent-primary);
+}
+
+.original-article-content pre {
+  background: var(--text-primary);
+  color: var(--bg-secondary);
+  padding: 16px;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  margin: 2em 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.original-article-content pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.original-article-content strong,
+.original-article-content b {
+  font-weight: 600;
+  color: #1A1A1A;
+}
+
+.original-article-content hr {
+  border: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-light), transparent);
+  margin: 3em 0;
+}
+
+.original-article-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 2em 0;
+  font-size: 15px;
+}
+
+.original-article-content th,
+.original-article-content td {
+  border: 1px solid var(--border-light);
+  padding: 10px 14px;
+  text-align: left;
+}
+
+.original-article-content th {
+  background: var(--bg-secondary);
+  font-weight: 600;
+}
+
+/* 微信公众号特殊样式修复 */
+.original-article-content section {
+  display: block;
+}
+
+.original-article-content section img,
+.original-article-content .rich_media_content img {
+  max-width: 100% !important;
+  height: auto !important;
+}
