@@ -9,6 +9,25 @@
 
 ---
 
+## 📸 应用截图
+
+### 智能收件箱 - AI 分析结果
+从 RSS 订阅源自动抓取文章，AI 智能提取核心观点、金句和关键概念
+
+![收件箱界面](./public/screenshots/inbox_view.png)
+
+### 订阅管理 - RSS 源配置
+轻松管理你的 RSS 订阅源，实时查看更新状态
+
+![订阅管理界面](./public/screenshots/subscriptions_view.png)
+
+### 知识图谱 - 可视化知识网络
+使用 D3.js 构建的交互式知识图谱，自动建立概念间的关联关系
+
+![知识图谱界面](./public/screenshots/knowledge_graph_view.png)
+
+---
+
 ## ✨ 核心特性
 
 ### 🤖 AI 深度分析
