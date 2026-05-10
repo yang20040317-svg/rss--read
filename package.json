@@ -3,11 +3,41 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron:dev": "set NODE_ENV=development && start /B npm run dev && npx wait-on http://localhost:3001 && electron .",
+    "electron:build": "npm run build && electron-builder"
+  },
+  "build": {
+    "productName": "双子座 RSS 阅读器",
+    "appId": "com.gemini.rss.reader",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "extraResources": [
+      "backend.exe"
+    ],
+    "files": [
+      "dist/**/*",
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "双子座 RSS 阅读器"
+    }
   },
   "dependencies": {
     "d3": "^7.9.0",
@@ -19,10 +49,13 @@
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
     "@vitejs/plugin-react": "^4.0.3",
+    "electron": "^42.0.0",
+    "electron-builder": "^26.8.1",
     "eslint": "^8.45.0",
     "eslint-plugin-react": "^7.32.2",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.3",
-    "vite": "^4.4.5"
+    "vite": "^4.4.5",
+    "wait-on": "^9.0.5"
   }
 }

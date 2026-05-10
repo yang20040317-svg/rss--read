@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
+  base: './', // [NEW] 适配 Electron 的相对路径加载
   plugins: [react()],
   server: {
     port: 3000,
@@ -26,6 +27,17 @@ export default defineConfig({
           proxy.on('proxyReq', (proxyReq, req, res) => {
             // 设置请求超时
             proxyReq.setTimeout(60000);
+          });
+        }
+      },
+      // 微信 API 代理
+      '/api/wechat': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/wechat/, ''),
+        configure: (proxy, options) => {
+          proxy.on('error', (err, req, res) => {
+            console.log('微信代理错误:', err);
           });
         }
       }

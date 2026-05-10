@@ -2,10 +2,16 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as d3 from 'd3';
 import {
   BookOpen, Zap, MessageSquare, Quote, Lightbulb, Link, FileText,
-  Check, Copy, RefreshCw, Layers, Inbox, Settings, Play, Rss,
+  Check, Copy, RefreshCw, Layers, Inbox, Settings, Play, Rss, Activity,
   UserPlus, AlertCircle, AlertTriangle, Trash2, Edit2, Plus, X, Upload, Download, MoreHorizontal,
   Info, HelpCircle, ExternalLink, Filter, CheckSquare, Square, Search, Sparkles, ChevronRight, ChevronDown, ChevronUp, ArrowRight, AlignLeft, HelpCircle as QuestionIcon, ArrowLeft, Network, Share2, ZoomIn, ZoomOut, Maximize, StickyNote, Tag, AlignJustify
 } from 'lucide-react';
+
+import { wechatService } from './services/wechatService';
+
+// [FIX] 打包后的 Electron 环境没有 Vite proxy，需要直连后端
+const isElectronEnv = window.location.protocol === 'file:';
+const WECHAT_API_BASE = isElectronEnv ? 'http://127.0.0.1:5000' : '/api/wechat';
 
 // --- 数据模型 ---
 
@@ -186,18 +192,14 @@ const getProxyStatus = () => proxyManager.getProxyStatus();
 const selectBestProxy = () => proxyManager.selectBestProxy();
 const getCurrentProxyIndex = () => proxyManager.getCurrentIndex();
 
-// 请求队列管理器（控制并发请求）
+// 网络请求队列管理器（控制并发抓取，避免代理被封）
 const requestQueue = {
-  maxConcurrent: 3,  // 最大并发请求数
-  running: 0,        // 当前运行的请求数
-  queue: [],         // 等待队列
-
-  // 添加请求到队列
+  maxConcurrent: 3,
+  running: 0,
+  queue: [],
   add(fn, priority = 0) {
     return new Promise((resolve, reject) => {
       const task = { fn, resolve, reject, priority };
-
-      // 根据优先级插入队列（优先级高的先执行）
       let inserted = false;
       for (let i = 0; i < this.queue.length; i++) {
         if (task.priority > this.queue[i].priority) {
@@ -206,101 +208,49 @@ const requestQueue = {
           break;
         }
       }
-      if (!inserted) {
-        this.queue.push(task);
-      }
-
+      if (!inserted) this.queue.push(task);
       this.processNext();
     });
   },
-
-  // 处理下一个请求
   processNext() {
-    if (this.running >= this.maxConcurrent || this.queue.length === 0) {
-      return;
-    }
-
+    if (this.running >= this.maxConcurrent || this.queue.length === 0) return;
     const task = this.queue.shift();
     this.running++;
-
-    Promise.resolve()
-      .then(() => task.fn())
-      .then(result => task.resolve(result))
-      .catch(error => task.reject(error))
-      .finally(() => {
-        this.running--;
-        this.processNext();
-      });
-  },
-
-  // 获取队列状态
-  getStatus() {
-    return {
-      running: this.running,
-      queued: this.queue.length,
-      maxConcurrent: this.maxConcurrent
-    };
-  },
-
-  // 清空队列
-  clear() {
-    this.queue = [];
+    Promise.resolve().then(() => task.fn()).then(r => task.resolve(r)).catch(e => task.reject(e))
+      .finally(() => { this.running--; this.processNext(); });
   }
 };
 
-// 真实可用的 RSS 订阅源
-const INITIAL_SUBSCRIPTIONS = [
-  {
-    id: 1,
-    name: "阮一峰的网络日志",
-    rssUrl: "https://www.ruanyifeng.com/blog/atom.xml",
-    status: "active",
-    frequency: "每周更新",
-    last_fetch: "点击刷新获取",
-    article_count: 0,
-    category: "技术博客"
+// AI 请求队列管理器（独立于网络抓取，响应更及时）
+const aiRequestQueue = {
+  maxConcurrent: 5,
+  running: 0,
+  queue: [],
+  add(fn, priority = 0) {
+    return new Promise((resolve, reject) => {
+      const task = { fn, resolve, reject, priority };
+      let inserted = false;
+      for (let i = 0; i < this.queue.length; i++) {
+        if (task.priority > this.queue[i].priority) {
+          this.queue.splice(i, 0, task);
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) this.queue.push(task);
+      this.processNext();
+    });
   },
-  {
-    id: 2,
-    name: "少数派",
-    rssUrl: "https://sspai.com/feed",
-    status: "active",
-    frequency: "每日更新",
-    last_fetch: "点击刷新获取",
-    article_count: 0,
-    category: "数字生活"
-  },
-  {
-    id: 3,
-    name: "36氪",
-    rssUrl: "https://36kr.com/feed",
-    status: "active",
-    frequency: "实时更新",
-    last_fetch: "点击刷新获取",
-    article_count: 0,
-    category: "科技商业"
-  },
-  {
-    id: 4,
-    name: "虎嗅网",
-    rssUrl: "https://rss.huxiu.com/",
-    status: "active",
-    frequency: "实时更新",
-    last_fetch: "点击刷新获取",
-    article_count: 0,
-    category: "商业科技"
-  },
-  {
-    id: 5,
-    name: "小众软件",
-    rssUrl: "https://feeds.appinn.com/appinns/",
-    status: "active",
-    frequency: "每日更新",
-    last_fetch: "点击刷新获取",
-    article_count: 0,
-    category: "软件推荐"
+  processNext() {
+    if (this.running >= this.maxConcurrent || this.queue.length === 0) return;
+    const task = this.queue.shift();
+    this.running++;
+    Promise.resolve().then(() => task.fn()).then(r => task.resolve(r)).catch(e => task.reject(e))
+      .finally(() => { this.running--; this.processNext(); });
   }
-];
+};
+
+const INITIAL_SUBSCRIPTIONS = [];
 
 // --- RSS 解析工具函数 ---
 
@@ -318,10 +268,14 @@ const fetchRSSFeed = async (rssUrl, retryCount = 0) => {
     try {
       // 获取当前代理函数并调用
       const proxyFn = getCorsProxy();
-      // 兼容旧代码：如果 proxyFn 是字符串（虽然我们改了，但为了保险），回退到旧逻辑，否则调用函数
-      const proxyUrl = typeof proxyFn === 'function' ? proxyFn(rssUrl) : proxyFn + encodeURIComponent(rssUrl);
+      
+      // [NEW] 如果是本地微信 API 链接，跳过代理直接请求
+      const isInternalWechat = rssUrl.includes('/api/wechat') || rssUrl.includes('localhost:5000') || rssUrl.includes('127.0.0.1:5000');
+      const proxyUrl = isInternalWechat 
+        ? rssUrl 
+        : (typeof proxyFn === 'function' ? proxyFn(rssUrl) : proxyFn + encodeURIComponent(rssUrl));
 
-      console.log('尝试获取 RSS:', rssUrl, '使用代理:', typeof proxyFn === 'function' ? 'Custom Function' : proxyFn);
+      console.log('尝试获取 RSS:', rssUrl, '使用模式:', isInternalWechat ? 'DIRECT' : 'PROXY');
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时（增加以提高可靠性）
@@ -419,7 +373,7 @@ const formatRelativeTime = (dateString) => {
     const diffHours = Math.floor(diffMs / 3600000);
     const diffDays = Math.floor(diffMs / 86400000);
 
-    if (diffMins < 1) return '刚刚';
+    if (diffMins < 1) return '1分钟内';
     if (diffMins < 60) return `${diffMins} 分钟前`;
     if (diffHours < 24) return `${diffHours} 小时前`;
     if (diffDays < 7) return `${diffDays} 天前`;
@@ -443,6 +397,29 @@ const fetchArticleContent = async (url, retryCount = 0) => {
   // 将请求添加到队列（优先级：2，文章内容获取优先级高于普通RSS请求）
   return requestQueue.add(async () => {
     try {
+      // [NEW] 如果是微信文章，优先使用本地后端解析，绕过跨域并获取更纯净的内容
+      if (url.includes('mp.weixin.qq.com')) {
+        try {
+          console.log('使用微信后端解析器:', url);
+          const response = await fetch(`${WECHAT_API_BASE}/api/article`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.plain_content) {
+              console.log('微信后端解析成功，长度:', data.plain_content.length);
+              return data.plain_content.substring(0, 8000);
+            }
+          }
+          console.warn('微信后端解析失败，将回退到通用代理模式');
+        } catch (wechatErr) {
+          console.error('微信后端调用异常:', wechatErr);
+        }
+      }
+
       // 获取当前代理函数并调用
       const proxyFn = getCorsProxy();
       const proxyUrl = typeof proxyFn === 'function' ? proxyFn(url) : proxyFn + encodeURIComponent(url);
@@ -450,7 +427,7 @@ const fetchArticleContent = async (url, retryCount = 0) => {
       console.log('尝试获取文章内容:', url, '使用代理:', typeof proxyFn === 'function' ? 'Custom Function' : proxyFn);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25秒超时（增加以提高可靠性）
+      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25秒超时
 
       const response = await fetch(proxyUrl, { signal: controller.signal });
       clearTimeout(timeoutId);
@@ -470,7 +447,7 @@ const fetchArticleContent = async (url, retryCount = 0) => {
       elementsToRemove.forEach(el => el.remove());
 
       // 优先提取文章主体内容
-      const articleEl = doc.querySelector('article, .article, .post, .content, .main-content, #content, main');
+      const articleEl = doc.querySelector('article, .article, .post, .content, .main-content, #content, main, #js_content');
       const textContent = articleEl
         ? articleEl.textContent
         : doc.body?.textContent || '';
@@ -500,13 +477,23 @@ const fetchArticleContent = async (url, retryCount = 0) => {
   }, 2); // 优先级2：文章内容获取
 };
 
+// [NEW] 备用分析方案：当全文获取失败时，尝试使用摘要或标题生成简要分析
+const analyzeFallback = (article) => ({
+  viewpoints: ["网络连接不稳定，分析受限"],
+  quotes: [article.summary ? article.summary.substring(0, 50) + "..." : "抓取全文失败"],
+  concepts: [],
+  failed: true,
+  analyzedAt: new Date().toISOString()
+});
+
 /**
  * 使用讯飞星火 AI 分析文章
  * @param content 文章内容
  * @param apiKey 讯飞 API Key (格式: APIKey:APISecret)
  * @returns 分析结果
  */
-const analyzeWithSparkAI = async (content, apiKey, retryCount = 0) => {
+const analyzeWithSparkAI = async (content, apiKey, baseUrl, model, priority = 0, onProgress = null, retryCount = 0) => {
+  if (onProgress) onProgress('AI 正在分析文章内容...');
   const prompt = `你是一个专业的文章分析助手。请深度分析以下文章内容，提取核心信息。
 
 【重要格式要求】
@@ -537,49 +524,44 @@ const analyzeWithSparkAI = async (content, apiKey, retryCount = 0) => {
 【文章内容】
 ${content}`;
 
-  // 将 AI 分析请求添加到队列（优先级：3，AI 分析优先级最高）
-  return requestQueue.add(async () => {
+  // 使用专门的 AI 队列（优先级：priority）
+  return aiRequestQueue.add(async () => {
+    if (onProgress) onProgress('AI 正在思考文章要点...');
     try {
-      const response = await fetch(
-        'https://api.siliconflow.cn/v1/chat/completions',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: 'Qwen/Qwen2.5-7B-Instruct',
-            messages: [
-              {
-                role: 'user',
-                content: prompt
-              }
-            ],
-            temperature: 0.7,
-            max_tokens: 2048,
-          })
-        }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || errorData.error?.message || `API 错误: ${response.status}`);
-      }
-
-      const data = await response.json();
+      if (onProgress && retryCount > 0) onProgress(`AI 正在重试分析 (第 ${retryCount} 次)...`);
+      
+      const data = await wechatService.aiAnalyze({
+        content: content,
+        api_key: apiKey,
+        base_url: baseUrl,
+        model: model,
+        prompt: prompt
+      });
+      
+      console.log('API 响应 (来自代理):', data);
+      
       const textContent = data.choices?.[0]?.message?.content;
+      console.log('AI 返回内容:', textContent);
 
       if (!textContent) {
         throw new Error('AI 未返回有效内容');
       }
 
-      // 解析 JSON 响应（处理可能的 markdown 代码块包装）
+      // 解析 JSON 响应（处理可能的 markdown 代码块包装及多余的前后缀文本）
       let jsonStr = textContent;
       const jsonMatch = textContent.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (jsonMatch) {
         jsonStr = jsonMatch[1];
+      } else {
+        // 兜底策略：寻找最外层的 { 和 }
+        const firstBrace = textContent.indexOf('{');
+        const lastBrace = textContent.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          jsonStr = textContent.substring(firstBrace, lastBrace + 1);
+        }
       }
+      console.log('解析 JSON:', jsonStr);
+      fetch('http://127.0.0.1:9999', { method: 'POST', body: 'AI Response: ' + textContent }).catch(()=>console.error('log fail'));
 
       const result = JSON.parse(jsonStr.trim());
 
@@ -589,57 +571,25 @@ ${content}`;
         concepts: result.concepts || []
       };
     } catch (error) {
-      console.error('AI 分析失败:', error);
-
-      // AI API 请求失败时的重试逻辑（最多重试3次）
       const maxRetries = 3;
-      if (retryCount < maxRetries) {
-        // 指数退避：基础延迟 * 2^重试次数，加上随机抖动
+      // 只有 429 (频率限制) 或 5xx (服务器错误) 且未达到最大次数才重试
+      const isTransientError = error.message.includes('429') || error.message.includes('500') || error.message.includes('503') || error.message.includes('Failed to fetch');
+      
+      if (isTransientError && retryCount < maxRetries) {
+        if (onProgress) onProgress(`API 繁忙，等待重试 (${retryCount + 1}/${maxRetries})...`);
         const baseDelay = 1500;
         const delay = Math.min(baseDelay * Math.pow(2, retryCount) + Math.random() * 1000, 10000);
-        console.log(`AI 分析重试 (${retryCount + 1}/${maxRetries})... 等待 ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
-        return analyzeWithSparkAI(content, apiKey, retryCount + 1);
+        return analyzeWithSparkAI(content, apiKey, baseUrl, model, priority, onProgress, retryCount + 1);
       }
-
+      // 其他错误（如 401 Key 错误）直接抛出
+      fetch('http://127.0.0.1:9999', { method: 'POST', body: 'AI Fetch Error: ' + String(error.stack || error.message || error) }).catch(()=>console.error('log fail'));
       throw error;
     }
-  }, 3); // 优先级3：AI 分析请求优先级最高
+  }, priority);
 };
 
-// 模拟收件箱初始数据
-const INITIAL_INBOX = [
-  {
-    id: 101,
-    title: "为什么聪明人总是在做蠢事？",
-    source: "L先生说",
-    date: "10 分钟前",
-    status: "pending",
-    url: "https://www.scientificamerican.com/article/rational-and-irrational-thought-the-thinking-that-iq-tests-miss/",
-    summary: "高智商并不等同于理性。大脑是认知吝啬鬼，倾向于使用直觉而非消耗能量的逻辑思考。",
-    quote: "智力是引擎，理性是方向盘。引擎越强，方向盘失灵时车祸越惨烈。"
-  },
-  {
-    id: 102,
-    title: "如何不靠运气致富：纳瓦尔的财富杠杆",
-    source: "刘润",
-    date: "2 小时前",
-    status: "pending",
-    url: "https://nav.al/rich",
-    summary: "在AI和数字化时代，传统的劳动力杠杆正在失效。普通人需要寻找新的\"零边际成本\"杠杆。",
-    quote: "在这个时代，复制的成本趋近于零，独特的判断力成为了最稀缺的资产。"
-  },
-  {
-    id: 103,
-    title: "AI 时代的超级个体生存指南",
-    source: "歸藏的 AI 工具箱",
-    date: "昨天",
-    status: "analyzed",
-    url: "https://openai.com/blog",
-    summary: "工具的进化速度超过了人类的学习速度。成为超级个体的关键不是掌握所有工具，而是建立核心工作流。",
-    quote: "不要做工具的奴隶，要做驾驭工具的牧羊人。"
-  },
-];
+const INITIAL_INBOX = [];
 
 // 模拟多篇文章的详细解析数据
 const MOCK_RESULTS_DB = {
@@ -800,6 +750,27 @@ const PreviewLogicV2 = ({ url, onHtmlLoaded, setLoading }) => {
 
       // 多代理备选方案（按照可靠性排序）
       const proxyServices = [
+        // 微信后端代理（仅限微信文章）
+        {
+          name: 'WeChat-API',
+          isWechatOnly: true,
+          getUrl: (targetUrl) => targetUrl, // 不需要 URL，因为是 POST 请求
+          parseResponse: async (res) => {
+            const data = await res.json();
+            if (!data.success || !data.content) {
+              throw new Error(data.error || '微信后端解析失败');
+            }
+            return data.content; // 返回 HTML 内容
+          },
+          fetchFn: async (targetUrl) => {
+            const response = await fetch(`${WECHAT_API_BASE}/api/article`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url: targetUrl })
+            });
+            return response;
+          }
+        },
         {
           name: 'AllOrigins',
           getUrl: (targetUrl) => `https://api.allorigins.win/get?url=${encodeURIComponent(targetUrl)}`,
@@ -812,32 +783,39 @@ const PreviewLogicV2 = ({ url, onHtmlLoaded, setLoading }) => {
           name: 'corsproxy.io',
           getUrl: (targetUrl) => `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
           parseResponse: async (res) => await res.text()
-        },
-        {
-          name: 'cors-anywhere (herokuapp)',
-          getUrl: (targetUrl) => `https://cors-anywhere.herokuapp.com/${targetUrl}`,
-          parseResponse: async (res) => await res.text()
         }
       ];
+
 
       let html = null;
       let lastError = null;
 
       // 依次尝试每个代理服务
       for (const proxy of proxyServices) {
+        // 微信后端只处理微信文章
+        if (proxy.isWechatOnly && !url.includes('mp.weixin.qq.com')) {
+          continue;
+        }
+
         try {
           console.log(`尝试使用 ${proxy.name} 代理获取:`, url);
 
-          const proxyUrl = proxy.getUrl(url);
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 15000);
+          const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-          const response = await fetch(proxyUrl, {
-            signal: controller.signal,
-            headers: {
-              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-            }
-          });
+          let response;
+          // 使用自定义 fetch 函数（如果有）
+          if (proxy.fetchFn) {
+            response = await proxy.fetchFn(url);
+          } else {
+            const proxyUrl = proxy.getUrl(url);
+            response = await fetch(proxyUrl, {
+              signal: controller.signal,
+              headers: {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+              }
+            });
+          }
           clearTimeout(timeoutId);
 
           if (!response.ok) {
@@ -862,6 +840,15 @@ const PreviewLogicV2 = ({ url, onHtmlLoaded, setLoading }) => {
       if (!html) {
         console.error('所有代理都失败了:', lastError);
         onHtmlLoaded(null);
+        setLoading(false);
+        return;
+      }
+
+      // [FIX] 如果是来自微信后端的内容，后端已经处理好了 HTML、图片代理和样式
+      // 不需要前端再次使用 DOMParser 进行二次解析提取，否则会因为找不到特定的 div 标签或字数太少而报错
+      if (html.includes('wechat-backend-mark-v8') || html.includes('article-desc') || html.includes('short-content')) {
+        console.log('检测到已处理的后端内容，跳过前端二次解析，直接渲染');
+        onHtmlLoaded(html);
         setLoading(false);
         return;
       }
@@ -922,6 +909,7 @@ const PreviewLogicV2 = ({ url, onHtmlLoaded, setLoading }) => {
               absoluteSrc = baseUrl + '/' + src;
             }
             img.setAttribute('src', absoluteSrc);
+            img.setAttribute('referrerPolicy', 'no-referrer'); // [FIX] 绕过微信防盗链
             img.removeAttribute('data-src');
             img.removeAttribute('data-original');
             img.removeAttribute('loading');
@@ -1007,6 +995,7 @@ const SkillAdminPanel = () => {
   const [newSubName, setNewSubName] = useState('');
   const [newSubRss, setNewSubRss] = useState('');
   const [newSubCategory, setNewSubCategory] = useState('');
+  const [activeAddTab, setActiveAddAddTab] = useState('wechat'); // 'wechat' or 'rss'
   const [categoryFilter, setCategoryFilter] = useState('all'); // [NEW] 分类筛选
   const [refreshingSubId, setRefreshingSubId] = useState(null); // [NEW] 正在刷新的订阅源 ID
   // 自定义确认模态框状态
@@ -1059,6 +1048,110 @@ const SkillAdminPanel = () => {
 
   // D3 References
   const svgRef = useRef(null);
+
+  // 微信搜索与订阅处理 [NEW]
+
+  // 核心同步逻辑：从后端获取真实数据 [NEW]
+  const refreshData = async () => {
+    if (isInboxRefreshing) return;
+    setIsInboxRefreshing(true);
+    try {
+      // 1. 获取后端微信订阅列表
+      const subs = await wechatService.getSubscriptions();
+      const mappedWechatSubs = subs.map(s => ({
+        id: s.fakeid,
+        name: s.nickname,
+        rssUrl: s.rss_url,
+        category: '微信公众号',
+        type: 'wechat', // [NEW] 明确微信类型
+        last_fetch: s.last_poll ? formatRelativeTime(s.last_poll) : '从未',
+        article_count: s.article_count,
+        status: 'active',
+        head_img: s.head_img
+      }));
+      
+      // 2. [FIX] 合并逻辑：保留本地手动添加的 RSS 订阅
+      setSubscriptions(prev => {
+        const localRss = prev.filter(s => s.type === 'rss' || (s.category !== '微信公众号' && !s.type));
+        const combined = [...mappedWechatSubs, ...localRss];
+        localStorage.setItem('rss_subscriptions', JSON.stringify(combined));
+        return combined;
+      });
+
+      // 2. 获取所有订阅的文章并汇总到收件箱 (并发获取)
+      const articlePromises = subs.map(async (sub) => {
+        try {
+          const articles = await wechatService.getArticles(sub.fakeid);
+          return articles.map(a => ({
+            id: a.aid || a.id || (a.title + a.link),
+            title: a.title,
+            source: sub.nickname,
+            date: formatRelativeTime(a.pub_time || a.create_time || a.update_time),
+            pub_time: a.pub_time || a.create_time || a.update_time,
+            status: a.has_content ? 'analyzed' : 'pending',
+            has_content: a.has_content,
+            content_text: a.content_text, // [NEW] 预载入的文本内容
+            url: a.link || a.url,
+            summary: a.digest || '',
+            cover: a.cover || '',
+            quote: a.has_content ? '内容已就绪' : '待分析'
+          }));
+        } catch (e) {
+          console.error('Failed to fetch articles for', sub.nickname, e);
+          return [];
+        }
+      });
+
+      const results = await Promise.all(articlePromises);
+      const allArticles = results.flat();
+
+      // 按发布时间降序排序
+      allArticles.sort((a, b) => (b.pub_time || 0) - (a.pub_time || 0));
+      setInboxItems(allArticles);
+      localStorage.setItem('rss_inbox', JSON.stringify(allArticles));
+    } catch (error) {
+      console.error('Refresh data failed:', error);
+    } finally {
+      setIsInboxRefreshing(false);
+    }
+  };
+
+  // 挂载初始加载 [NEW]
+  useEffect(() => {
+    refreshData();
+  }, []);
+  const handleSearchWechat = async () => {
+    if (!newSubName.trim()) return;
+    setIsSearchingWechat(true);
+    try {
+      const results = await wechatService.searchOfficialAccount(newSubName);
+      setWechatSearchResults(results);
+    } catch (error) {
+      console.error('Search failed:', error);
+    } finally {
+      setIsSearchingWechat(false);
+    }
+  };
+
+  const handleQuickSubscribe = async (account) => {
+    try {
+      setIsProcessing(true);
+      const result = await wechatService.subscribe(account);
+      if (result.success) {
+        // 成功订阅后，刷新全局数据以获取最新列表和文章
+        await refreshData();
+        setWechatSearchResults([]);
+        setIsAddModalOpen(false);
+      } else {
+        alert('订阅失败: ' + (result.message || '未知错误'));
+      }
+    } catch (error) {
+      console.error('Subscribe error:', error);
+      alert('订阅出错，请检查后端服务状态');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
   const simulationRef = useRef(null);
   const nodesRef = useRef(graphNodes.map(d => ({ ...d }))); // Working copy for d3
   const linksRef = useRef(graphLinks.map(d => ({ ...d }))); // Working copy for d3
@@ -1088,18 +1181,18 @@ const SkillAdminPanel = () => {
       .force("charge", d3.forceManyBody().strength(-300))
       .force("x", d3.forceX(width / 2).strength(0.05))
       .force("y", d3.forceY(height / 2).strength(0.05))
-      .force("collide", d3.forceCollide().radius(40))
-      .velocityDecay(0.6) // 增加阻尼防止飞散
-      .alphaTarget(0.01) // 保持极微小的呼吸感
+      .force("collide", d3.forceCollide().radius(45))
+      .velocityDecay(0.2) // [FIX] 降低阻尼，让运动更丝滑、更有惯性
+      .alphaTarget(0.1)  // [FIX] 提高目标能量，保持持续的“游动”感
       .on("tick", ticked);
 
     simulationRef.current = simulation;
 
     function ticked() {
-      const svg = d3.select(svgRef.current);
+      const container = d3.select(svgRef.current).select(".zoom-main");
 
       // Update links
-      svg.selectAll("line.link-line")
+      container.selectAll("line.link-line")
         .data(linksRef.current)
         .attr("x1", d => d.source.x)
         .attr("y1", d => d.source.y)
@@ -1107,7 +1200,7 @@ const SkillAdminPanel = () => {
         .attr("y2", d => d.target.y);
 
       // Update nodes
-      svg.selectAll("g.node-group")
+      container.selectAll("g.node-group")
         .data(nodesRef.current)
         .attr("transform", d => `translate(${d.x},${d.y})`);
     }
@@ -1129,6 +1222,19 @@ const SkillAdminPanel = () => {
         d.fy = null;
       });
 
+
+    // [NEW] Zoom behavior
+    const zoom = d3.zoom()
+      .scaleExtent([0.1, 10]) // 缩放范围
+      .on("zoom", (event) => {
+        d3.select(svgRef.current).select(".zoom-main").attr("transform", event.transform);
+      });
+
+    d3.select(svgRef.current)
+      .call(zoom)
+      .on("dblclick.zoom", null);
+
+    // [FIX] 确保在元素渲染后立即绑定拖拽行为
     d3.select(svgRef.current).selectAll("g.node-group").call(drag);
 
     return () => {
@@ -1157,11 +1263,30 @@ const SkillAdminPanel = () => {
   const [customResults, setCustomResults] = useState({});
 
   // AI Settings State
-  const [sparkApiKey, setSparkApiKey] = useState(() => {
-    // 尝试从 localStorage 读取已保存的 API Key
-    return localStorage.getItem('spark_api_key') || '';
+  // 文章分析 AI 配置 (DoroCli)
+  const [articleAiKey, setArticleAiKey] = useState(() => {
+    return localStorage.getItem('article_ai_key') || 'sk-bvaHNdNSE3u67uxyfsOFLzEWFaRAUSEttyWCocyXH1ItawI3';
+  });
+  const [articleAiBaseUrl, setArticleAiBaseUrl] = useState(() => {
+    return localStorage.getItem('article_ai_base_url') || 'https://www.dorocli.cc';
+  });
+  const [articleAiModel, setArticleAiModel] = useState(() => {
+    return localStorage.getItem('article_ai_model') || 'gpt-4o-mini';
+  });
+
+  // 通用/图谱 AI 配置 (SiliconFlow)
+  const [generalAiKey, setGeneralAiKey] = useState(() => {
+    return localStorage.getItem('general_ai_key') || localStorage.getItem('spark_api_key') || '';
+  });
+  const [generalAiBaseUrl, setGeneralAiBaseUrl] = useState(() => {
+    return localStorage.getItem('general_ai_base_url') || 'https://api.siliconflow.cn';
+  });
+  const [generalAiModel, setGeneralAiModel] = useState(() => {
+    return localStorage.getItem('general_ai_model') || 'Qwen/Qwen2.5-7B-Instruct';
   });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef(null); // [NEW] 用于点击外部关闭
   const [analysisError, setAnalysisError] = useState(null);
   const [analysisProgress, setAnalysisProgress] = useState('');
 
@@ -1181,6 +1306,29 @@ const SkillAdminPanel = () => {
   // 正在后台分析的文章 ID 列表
   const [backgroundAnalyzing, setBackgroundAnalyzing] = useState(new Set());
 
+  // 用户是否正在手动分析文章（暂停后台分析）
+  const [isUserAnalyzing, setIsUserAnalyzing] = useState(false);
+
+  // 微信后端状态 [NEW]
+  const [loginStatus, setLoginStatus] = useState({ isLoggedIn: false, nickname: '', expire_time: null, login_status: 'NOT_LOGGED_IN' });
+  const [wechatSearchResults, setWechatSearchResults] = useState([]);
+  const [isSearchingWechat, setIsSearchingWechat] = useState(false);
+
+  // 定期检查登录状态 [NEW]
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const status = await wechatService.checkHealth();
+        setLoginStatus(status);
+      } catch (error) {
+        console.error('Failed to check login status:', error);
+      }
+    };
+    checkStatus();
+    const timer = setInterval(checkStatus, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
   // 自动保存订阅数据到 localStorage
   useEffect(() => {
     localStorage.setItem('rss_subscriptions', JSON.stringify(subscriptions));
@@ -1196,14 +1344,16 @@ const SkillAdminPanel = () => {
     localStorage.setItem('rss_analysis_cache', JSON.stringify(analysisCache));
   }, [analysisCache]);
 
-  // 文章处理队列，确保原子更新避免竞态条件
+  // 文章处理队列，支持优先级（数字越大越优先）
   const articleProcessingQueue = {
     queue: [],
     running: 0,
     maxConcurrent: 2,
 
-    add(task) {
-      this.queue.push(task);
+    add(task, priority = 1) {
+      this.queue.push({ task, priority });
+      // 按优先级降序排序
+      this.queue.sort((a, b) => b.priority - a.priority);
       this.processNext();
     },
 
@@ -1213,7 +1363,7 @@ const SkillAdminPanel = () => {
       }
 
       this.running++;
-      const task = this.queue.shift();
+      const { task } = this.queue.shift();
 
       try {
         await task();
@@ -1225,12 +1375,12 @@ const SkillAdminPanel = () => {
   };
 
   // 后台分析单篇文章
-  const analyzeArticleInBackground = async (article) => {
-    if (!sparkApiKey || analysisCache[article.id]) {
+  const analyzeArticleInBackground = async (article, priority = 1) => {
+    if (!articleAiKey || analysisCache[article.id]) {
       return;
     }
 
-    // 使用文章处理队列确保原子操作
+    // 使用文章处理队列，传入优先级
     articleProcessingQueue.add(async () => {
       if (backgroundAnalyzing.has(article.id) || analysisCache[article.id]) {
         return;
@@ -1239,6 +1389,16 @@ const SkillAdminPanel = () => {
       setBackgroundAnalyzing(prev => new Set([...prev, article.id]));
 
       try {
+        // [FIX] 为分析任务添加强制超时（2分钟），防止卡死
+        const analysisTimeout = setTimeout(() => {
+          console.warn(`[超时] 文章分析任务已强制结束: ${article.title}`);
+          setBackgroundAnalyzing(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(article.id);
+            return newSet;
+          });
+        }, 120000);
+
         // 获取文章内容
         let contentToAnalyze = article.summary || '';
         if (article.url && article.url !== '#') {
@@ -1247,13 +1407,15 @@ const SkillAdminPanel = () => {
             if (fullContent && fullContent.length > 100) {
               contentToAnalyze = fullContent;
             }
-          } catch {
-            // 使用摘要
+          } catch (err) {
+            console.warn('抓取全文失败，降级使用摘要:', err.message);
           }
         }
+        
+        clearTimeout(analysisTimeout);
 
-        if (contentToAnalyze.length >= 50) {
-          const aiResult = await analyzeWithSparkAI(contentToAnalyze, sparkApiKey);
+        if (contentToAnalyze.length >= 20) { // 降低门槛，尽量分析
+          const aiResult = await analyzeWithSparkAI(contentToAnalyze, articleAiKey, articleAiBaseUrl, articleAiModel, priority);
 
           // 保存到缓存
           setAnalysisCache(prev => ({
@@ -1283,6 +1445,24 @@ const SkillAdminPanel = () => {
         }
       } catch (error) {
         console.error('后台分析失败:', article.title, error.message);
+        // [FIX] 记录失败状态，避免无限重试
+        setInboxItems(prev => prev.map(item =>
+          item.id === article.id
+            ? { ...item, status: 'failed', quote: '分析失败，请重试' }
+            : item
+        ));
+        
+        // 同时也更新缓存，记录失败信息
+        setAnalysisCache(prev => ({
+          ...prev,
+          [article.id]: { 
+            ...article, 
+            failed: true, 
+            error: error.message,
+            viewpoints: ["分析暂时不可用: " + String(error.message || error)],
+            quotes: ["分析遇到一点小问题，可能是网络原因。"]
+          }
+        }));
       } finally {
         setBackgroundAnalyzing(prev => {
           const newSet = new Set(prev);
@@ -1292,6 +1472,33 @@ const SkillAdminPanel = () => {
       }
     });
   };
+
+  // [NEW] 实时同步：当后台分析完成时，如果用户正在看这篇文章，立即更新界面
+  useEffect(() => {
+    if (selectedArticle && currentView === 'result' && (analysisResult?.analyzing || !analysisResult?.viewpoints?.length)) {
+      const cached = analysisCache[selectedArticle.id];
+      if (cached && !cached.failed) {
+        console.log('检测到后台分析完成，正在自动更新阅读器内容');
+        setAnalysisResult(cached);
+      }
+    }
+  }, [analysisCache, selectedArticle?.id, currentView]);
+
+  // [NEW] 启动自检：自动为列表中的未分析文章开启后台任务
+  useEffect(() => {
+    if (!articleAiKey || isUserAnalyzing) return;
+    
+    // 找出所有未分析且不在分析中的文章
+    const pendingArticles = inboxItems.filter(item => 
+      item.status !== 'analyzed' && !backgroundAnalyzing.has(item.id)
+    );
+    
+    if (pendingArticles.length > 0) {
+      console.log(`[启动自检] 发现 ${pendingArticles.length} 篇待分析文章，已加入后台队列`);
+      // 批量加入后台分析队列（队列会自动控制并发）
+      pendingArticles.forEach(article => analyzeArticleInBackground(article));
+    }
+  }, [articleAiKey, inboxItems.length]); // 当 API Key 准备好或列表长度变化时检查
 
   // 自动获取所有订阅源的文章
   const autoFetchAllFeeds = async () => {
@@ -1326,8 +1533,10 @@ const SkillAdminPanel = () => {
                 existingTitles.add(article.title);
                 existingUrls.add(article.link);
 
+                // [FIX] 使用 URL 生成确定性 ID
+                const deterministicId = article.link ? `id-${btoa(article.link).substring(0, 16)}` : `rss-${Date.now()}`;
                 const newArticle = {
-                  id: Date.now() + Math.random(),
+                  id: deterministicId,
                   title: article.title,
                   source: sub.name,
                   date: formatRelativeTime(article.pubDate),
@@ -1347,12 +1556,12 @@ const SkillAdminPanel = () => {
             return prevInbox;
           });
 
-          // 触发后台分析（分批处理）
-          if (addedArticlesForAnalysis.length > 0) {
-            addedArticlesForAnalysis.forEach((article, index) => {
-              setTimeout(() => analyzeArticleInBackground(article), index * 500);
-            });
-          }
+          // 禁用后台自动分析：只有在用户点击文章时才分析
+          // if (addedArticlesForAnalysis.length > 0) {
+          //   addedArticlesForAnalysis.forEach((article, index) => {
+          //     setTimeout(() => analyzeArticleInBackground(article), index * 500);
+          //   });
+          // }
 
           // 获取请求延迟时间
           const fetchDelay = Date.now() - (sub.lastFetchStart || Date.now());
@@ -1412,25 +1621,28 @@ const SkillAdminPanel = () => {
     console.log('所有订阅源获取完成');
   };
 
-  // 页面加载时自动获取并分析待处理文章
+  // 禁用页面加载时的后台自动分析（只在用户点击文章时才分析）
+  // useEffect(() => {
+  //   if (sparkApiKey && !isUserAnalyzing) {
+  //     const timer = setTimeout(() => {
+  //       const pendingArticles = inboxItems
+  //         .filter(item => item.status === 'pending' && !analysisCache[item.id] && !backgroundAnalyzing.has(item.id))
+  //         .slice(0, 1);
+  // [NEW] 启动自检：自动为列表中的未分析文章开启后台任务
   useEffect(() => {
-    if (sparkApiKey) {
-      // 延迟执行，避免阻塞页面加载
-      const timer = setTimeout(() => {
-        // 自动分析未分析的文章
-        const pendingArticles = inboxItems
-          .filter(item => item.status === 'pending' && !analysisCache[item.id] && !backgroundAnalyzing.has(item.id))
-          .slice(0, 3); // 限制同时分析数量
-
-        // 使用批处理方式添加到分析队列
-        pendingArticles.forEach((item, index) => {
-          setTimeout(() => analyzeArticleInBackground(item), index * 800); // 缩短间隔，因为队列会控制并发
-        });
-      }, 2000);
-
-      return () => clearTimeout(timer);
+    if (!articleAiKey || isUserAnalyzing) return;
+    
+    // 找出所有未分析且不在分析中的文章
+    const pendingArticles = inboxItems.filter(item => 
+      item.status !== 'analyzed' && !backgroundAnalyzing.has(item.id)
+    );
+    
+    if (pendingArticles.length > 0) {
+      console.log(`[启动自检] 发现 ${pendingArticles.length} 篇待分析文章，已加入后台队列`);
+      // 批量加入后台分析队列（队列会自动控制并发）
+      pendingArticles.forEach(article => analyzeArticleInBackground(article));
     }
-  }, [sparkApiKey, inboxItems, analysisCache]); // 监听相关状态变化，确保使用最新数据
+  }, [articleAiKey, inboxItems.length]); // 当 API Key 准备好或列表长度变化时检查
 
   // 定时自动刷新（分组刷新策略）
   useEffect(() => {
@@ -1444,6 +1656,13 @@ const SkillAdminPanel = () => {
 
     return () => clearInterval(mainInterval);
   }, [subscriptions]); // 监听订阅列表变化，确保使用最新数据
+
+  // [NEW] 统一持久化订阅列表到本地，确保添加标准 RSS 后不会丢失
+  useEffect(() => {
+    if (subscriptions.length > 0) {
+      localStorage.setItem('rss_subscriptions', JSON.stringify(subscriptions));
+    }
+  }, [subscriptions]);
 
   // 智能分组刷新：根据订阅源优先级和健康状态进行分组
   const smartGroupRefresh = async () => {
@@ -1499,8 +1718,10 @@ const SkillAdminPanel = () => {
                   existingTitles.add(article.title);
                   existingUrls.add(article.link);
 
+                  // [FIX] 使用 URL 生成确定性 ID
+                  const deterministicId = article.link ? `id-${btoa(article.link).substring(0, 16)}` : `rss-${Date.now()}`;
                   const newArticle = {
-                    id: Date.now() + Math.random(),
+                    id: deterministicId,
                     title: article.title,
                     source: sub.name,
                     date: formatRelativeTime(article.pubDate),
@@ -1515,10 +1736,10 @@ const SkillAdminPanel = () => {
               }
 
               if (newArticles.length > 0) {
-                // 触发后台分析
-                newArticles.forEach((article, index) => {
-                  setTimeout(() => analyzeArticleInBackground(article), index * 500);
-                });
+                // 禁用后台自动分析：只有在用户点击文章时才分析
+                // newArticles.forEach((article, index) => {
+                //   setTimeout(() => analyzeArticleInBackground(article), index * 500);
+                // });
 
                 // 返回更新后的收件箱列表
                 return [...newArticles, ...prevInbox];
@@ -1592,63 +1813,11 @@ const SkillAdminPanel = () => {
 
   // --- Handlers ---
 
-  // 从真实 RSS 源刷新收件箱
+  // 从后端刷新收件箱
   const handleRefreshInbox = async () => {
-    setIsInboxRefreshing(true);
-    const activeSubs = subscriptions.filter(s => s.status === 'active');
-
-    if (activeSubs.length === 0) {
-      alert("没有活跃的订阅源，无法抓取新文章。请先添加订阅。");
-      setIsInboxRefreshing(false);
-      return;
-    }
-
-    try {
-      // 随机选择一个订阅源获取文章
-      const randomSub = activeSubs[Math.floor(Math.random() * activeSubs.length)];
-      const articles = await fetchRSSFeed(randomSub.rssUrl);
-
-      if (articles.length > 0) {
-        // 取第一篇最新文章
-        const latestArticle = articles[0];
-
-        // 检查是否已存在（避免重复）
-        const exists = inboxItems.some(item =>
-          item.title === latestArticle.title || item.url === latestArticle.link
-        );
-
-        if (!exists) {
-          const newArticle = {
-            id: Date.now(),
-            title: latestArticle.title,
-            source: randomSub.name,
-            date: formatRelativeTime(latestArticle.pubDate),
-            status: "pending",
-            url: latestArticle.link,
-            summary: latestArticle.description + '...',
-            quote: "点击分析提取金句"
-          };
-          setInboxItems(prev => [newArticle, ...prev]);
-
-          // 更新订阅源状态
-          setSubscriptions(prev => prev.map(sub =>
-            sub.id === randomSub.id
-              ? { ...sub, last_fetch: '刚刚', article_count: sub.article_count + 1, status: 'active' }
-              : sub
-          ));
-        } else {
-          alert(`「${randomSub.name}」暂无新文章，请稍后再试或切换其他订阅源。`);
-        }
-      } else {
-        alert(`「${randomSub.name}」未找到文章，可能是 RSS 格式问题。`);
-      }
-    } catch (error) {
-      console.error('刷新失败:', error);
-      alert(`获取 RSS 失败: ${error.message}\n\n提示：部分 RSS 源可能暂时不可用，请稍后重试。`);
-    } finally {
-      setIsInboxRefreshing(false);
-    }
+    await refreshData();
   };
+
 
   const filteredInboxItems = inboxItems.filter(item => {
     // 0. 分类筛选
@@ -1681,6 +1850,7 @@ const SkillAdminPanel = () => {
       frequency: "每日更新",
       last_fetch: "验证中...",
       category: newSubCategory.trim() || '未分类',
+      type: 'rss', // [NEW] 标记为手动添加的 RSS
       article_count: 0
     };
 
@@ -1721,16 +1891,50 @@ const SkillAdminPanel = () => {
     });
   };
 
-  // 确认删除
-  const handleConfirmDelete = () => {
-    const targetId = Number(confirmModal.subId);
-    console.log('Deleting subscription:', targetId);
-    setSubscriptions(prev => prev.filter(s => s.id !== targetId));
-    // 如果删除的是当前选中的订阅源，回到收件箱全部视图
-    if (selectedFeedId === targetId) {
-      setSelectedFeedId(null);
+  // 确认删除 [MODIFIED]
+  const handleConfirmDelete = async () => {
+    const targetId = confirmModal.subId; 
+    const subName = confirmModal.subName;
+    console.log('正在执行彻底删除:', subName, targetId);
+    
+    try {
+      // 1. 同步注销后端任务 (如果是微信源)
+      const subToDelete = subscriptions.find(s => String(s.id) === String(targetId));
+      if (subToDelete && (subToDelete.category === '微信公众号' || isNaN(Number(targetId)))) {
+        try {
+          await wechatService.unsubscribe(targetId);
+        } catch (err) {
+          console.warn('后端取消订阅失败，可能接口不支持或已失效:', err);
+        }
+      }
+      
+      // 2. 从本地订阅列表中移除
+      const updatedSubs = subscriptions.filter(s => String(s.id) !== String(targetId));
+      setSubscriptions(updatedSubs);
+      localStorage.setItem('rss_subscriptions', JSON.stringify(updatedSubs));
+      
+      // 3. [NEW] 关联删除：从收件箱中移除该源的所有文章
+      setInboxItems(prev => {
+        const updatedInbox = prev.filter(item => item.source !== subName);
+        localStorage.setItem('rss_inbox', JSON.stringify(updatedInbox));
+        return updatedInbox;
+      });
+      
+      // 4. 重置视图状态
+      if (selectedFeedId && String(selectedFeedId) === String(targetId)) {
+        setSelectedFeedId(null);
+        setCurrentView('inbox');
+      }
+      
+      setConfirmModal({ isOpen: false, subId: null, subName: '' });
+      console.log('订阅源及其关联文章已成功清理');
+      
+    } catch (err) {
+      console.error('删除过程出错:', err);
+      // 即使同步出错，本地也先移除以保证体验
+      setSubscriptions(prev => prev.filter(s => String(s.id) !== String(targetId)));
+      setConfirmModal({ isOpen: false, subId: null, subName: '' });
     }
-    setConfirmModal({ isOpen: false, subId: null, subName: '' });
   };
 
   // 取消删除
@@ -1809,8 +2013,10 @@ const SkillAdminPanel = () => {
         const exists = inboxItems.some(item => item.title === article.title || item.url === article.link);
         if (!exists) {
           newCount++;
+          // [FIX] 使用 URL 生成确定性 ID，确保缓存持久有效
+          const deterministicId = article.link ? `id-${btoa(article.link).substring(0, 16)}` : `rss-${Date.now()}`;
           const newArticle = {
-            id: Date.now() + Math.random(),
+            id: deterministicId,
             title: article.title,
             source: sub.name,
             date: formatRelativeTime(article.pubDate),
@@ -1820,7 +2026,8 @@ const SkillAdminPanel = () => {
             quote: '后台分析中...'
           };
           setInboxItems(prev => [newArticle, ...prev]);
-          setTimeout(() => analyzeArticleInBackground(newArticle), 1000);
+          // 禁用后台自动分析：只有在用户点击文章时才分析
+          // setTimeout(() => analyzeArticleInBackground(newArticle), 1000);
         }
       }
 
@@ -1872,78 +2079,147 @@ const SkillAdminPanel = () => {
     URL.revokeObjectURL(url);
   };
 
+  // 直接查看文章（先显示标题摘要，后台分析）
+  const handleViewArticle = (article) => {
+    setSelectedArticle(article);
+    
+    // 如果有缓存且不是失败的结果，直接显示分析结果
+    const cachedResult = analysisCache[article.id];
+    if (cachedResult && !cachedResult.failed) {
+      setAnalysisResult(cachedResult);
+      setCurrentRelatedArticles([]);
+      setCurrentView('result');
+      return;
+    }
+    
+    // 先显示标题、作者、摘要 + 分析中占位符
+    setAnalysisResult({
+      title: article.title,
+      url: article.url,
+      author: article.source,
+      summary: article.summary || '（无摘要）',
+      viewpoints: [], // 空数组表示分析中
+      quotes: [],
+      concepts: [],
+      analyzedAt: null,
+      analyzing: true
+    });
+    setCurrentRelatedArticles([]);
+    setCurrentView('result');
+    
+    // 有 API Key 时，后台触发分析
+    if (articleAiKey) {
+      handleInboxAnalyze(article);
+    }
+  };
+
   // 使用 AI 分析文章（优先使用缓存）
   const handleInboxAnalyze = async (article) => {
     // 检查 API Key
-    if (!sparkApiKey) {
+    if (!articleAiKey) {
       setIsSettingsOpen(true);
-      alert('请先配置 SiliconFlow API Key 才能使用 AI 分析功能');
+      alert('请先配置 API Key 才能使用 AI 分析功能');
       return;
     }
 
     setSelectedArticle(article);
 
-    // 优先检查缓存，如果有缓存直接显示
-    if (analysisCache[article.id]) {
+    // 优先检查缓存，如果有缓存且成功，直接显示
+    if (analysisCache[article.id] && !analysisCache[article.id].failed) {
       setAnalysisResult(analysisCache[article.id]);
       setCurrentRelatedArticles([]);
       setCurrentView('result');
       return;
     }
 
-    // 如果正在后台分析，提示用户
-    if (backgroundAnalyzing.has(article.id)) {
-      setCurrentView('processing');
-      setIsProcessing(true);
-      setAnalysisProgress('文章正在后台分析中，请稍候...');
+    // [FIX] 如果正在后台分析，不再死等。前端立即启动高优先级任务接管，确保用户体验
+    // 如果后台已经分析完成，上面的缓存检查已经拦截并返回了。
+    // 这里我们直接开始实时分析逻辑，不进入等待循环。
 
-      // 等待后台分析完成
-      const checkInterval = setInterval(() => {
-        if (analysisCache[article.id]) {
-          clearInterval(checkInterval);
-          setAnalysisResult(analysisCache[article.id]);
-          setCurrentRelatedArticles([]);
-          setIsProcessing(false);
-          setCurrentView('result');
-        }
-      }, 1000);
 
-      // 30秒超时
-      setTimeout(() => clearInterval(checkInterval), 30000);
-      return;
-    }
-
-    // 没有缓存，开始实时分析
-    setCurrentView('processing');
+    // 没有缓存，开始实时分析（保持 result 视图，显示加载动画）
     setIsProcessing(true);
+    setIsUserAnalyzing(true); // 用户正在手动分析，暂停后台分析
     setAnalysisError(null);
-    setAnalysisProgress('正在获取文章内容...');
+    setAnalysisProgress('AI 正在分析文章...');
 
     try {
-      // 步骤 1: 获取文章内容
-      let contentToAnalyze = article.summary || '';
-
+      // 优先从原文链接获取完整内容
+      let contentToAnalyze = '';
+      
       if (article.url && article.url !== '#') {
-        try {
-          setAnalysisProgress('正在从网页获取完整内容...');
-          const fullContent = await fetchArticleContent(article.url);
-          if (fullContent && fullContent.length > 100) {
-            contentToAnalyze = fullContent;
+        // [NEW] 如果已经有预载入的文本，直接使用，秒开分析
+        if (article.content_text && article.content_text.length > 100) {
+          contentToAnalyze = article.content_text;
+          setAnalysisProgress('使用预载入内容进行分析...');
+          console.log('使用预载入内容，跳过网络请求');
+        } else {
+          const isPreloaded = article.has_content;
+          setAnalysisProgress(isPreloaded ? '从本地缓存载入文章内容...' : '正在获取原文内容...');
+          try {
+            // 使用专门的微信公众号文章解析服务
+            const articleDetail = await wechatService.getArticleDetail(article.url);
+            if (articleDetail && articleDetail.content) {
+            // 移除 HTML 标签，保留纯文本
+            const plainText = articleDetail.content
+              .replace(/<[^>]*>/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (plainText.length > 100) {
+              contentToAnalyze = plainText;
+              console.log('已获取原文完整内容，长度:', plainText.length);
+            }
           }
         } catch (fetchError) {
-          console.warn('无法获取完整文章，使用摘要内容:', fetchError);
+          console.log('获取公众号文章内容失败:', fetchError.message);
+          // 备用：尝试通用网页抓取
+          try {
+            const fullContent = await fetchArticleContent(article.url);
+            if (fullContent && fullContent.length > 100) {
+              contentToAnalyze = fullContent;
+              console.log('已获取网页内容，长度:', fullContent.length);
+            }
+          } catch (fallbackError) {
+            console.log('获取网页内容也失败:', fallbackError.message);
+          }
+        }
         }
       }
 
+      // 如果原文获取失败，使用 RSS 摘要作为备用
       if (!contentToAnalyze || contentToAnalyze.length < 50) {
-        throw new Error('文章内容太短，无法进行有效分析');
+        contentToAnalyze = article.summary || '';
+        console.log('使用 RSS 摘要，长度:', contentToAnalyze.length);
       }
 
-      // 步骤 2: 调用 AI 分析
-      setAnalysisProgress('AI 正在深度分析文章...');
-      const aiResult = await analyzeWithSparkAI(contentToAnalyze, sparkApiKey);
+      // 最终检查内容长度
+      if (!contentToAnalyze || contentToAnalyze.length < 50) {
+        setAnalysisResult(prev => ({
+          ...prev,
+          viewpoints: ['（文章内容太短，无法分析）'],
+          quotes: prev.summary ? [prev.summary] : [],
+          concepts: [],
+          analyzing: false,
+          tooShort: true
+        }));
+        setIsProcessing(false);
+        setIsUserAnalyzing(false);
+        return;
+      }
 
-      // 步骤 3: 保存到缓存
+      console.log('最终分析内容长度:', contentToAnalyze.length);
+
+      // 调用 AI 分析
+      const aiResult = await analyzeWithSparkAI(
+        contentToAnalyze, 
+        articleAiKey,
+        articleAiBaseUrl,
+        articleAiModel,
+        10, // 高优先级
+        (progress) => setAnalysisProgress(progress) // 实时进度反馈
+      );
+
+      // 保存到缓存
       const result = {
         title: article.title,
         url: article.url,
@@ -1963,6 +2239,7 @@ const SkillAdminPanel = () => {
       setAnalysisResult(result);
       setCurrentRelatedArticles([]);
       setIsProcessing(false);
+      setIsUserAnalyzing(false); // 分析完成，恢复后台分析
       setCurrentView('result');
       setInboxItems(prev => prev.map(item =>
         item.id === article.id ? { ...item, status: 'analyzed' } : item
@@ -1970,10 +2247,18 @@ const SkillAdminPanel = () => {
 
     } catch (error) {
       console.error('AI 分析失败:', error);
-      setAnalysisError(error.message);
+      fetch('http://127.0.0.1:9999', { method: 'POST', body: 'AI 分析失败: ' + String(error.stack || error.message || error) }).catch(()=>console.error('log fail'));
+      // 分析失败时，更新 analysisResult 的 viewpoints 显示失败信息
+      setAnalysisResult(prev => ({
+        ...prev,
+        viewpoints: ['（分析失败: ' + String(error.message || error) + '）'],
+        quotes: prev.summary ? [prev.summary] : [],
+        concepts: [],
+        analyzing: false,
+        failed: true
+      }));
       setIsProcessing(false);
-      setCurrentView('inbox');
-      alert(`AI 分析失败: ${error.message}`);
+      setIsUserAnalyzing(false);
     }
   };
 
@@ -1982,21 +2267,23 @@ const SkillAdminPanel = () => {
     if (!manualInputValue.trim()) return;
 
     // 检查 API Key
-    if (!sparkApiKey) {
+    if (!articleAiKey) {
       setIsSettingsOpen(true);
-      alert('请先配置 SiliconFlow API Key 才能使用 AI 分析功能');
+      alert('请先配置 API Key 才能使用 AI 分析功能');
       return;
     }
 
     setCurrentView('processing');
     setIsProcessing(true);
+    setIsUserAnalyzing(true); // 用户正在手动分析，暂停后台分析
     setAnalysisError(null);
     setAnalysisProgress('正在准备分析...');
 
+    let contentToAnalyze = '';
+    let articleTitle = '';
+    let articleUrl = '#';
+
     try {
-      let contentToAnalyze = '';
-      let articleTitle = '';
-      let articleUrl = '#';
 
       if (manualInputType === 'url') {
         // URL 模式：获取网页内容
@@ -2016,7 +2303,7 @@ const SkillAdminPanel = () => {
 
       // 调用 AI 分析
       setAnalysisProgress('AI 正在深度分析文章...');
-      const aiResult = await analyzeWithSparkAI(contentToAnalyze, sparkApiKey);
+      const aiResult = await analyzeWithSparkAI(contentToAnalyze, articleAiKey, articleAiBaseUrl, articleAiModel);
 
       // 创建新的收件箱条目
       const newId = Date.now();
@@ -2024,7 +2311,7 @@ const SkillAdminPanel = () => {
         id: newId,
         title: articleTitle,
         source: '手动导入',
-        date: '刚刚',
+        date: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
         status: 'analyzed',
         url: articleUrl,
         summary: contentToAnalyze.substring(0, 150) + '...',
@@ -2047,14 +2334,27 @@ const SkillAdminPanel = () => {
 
       setManualInputValue('');
       setIsProcessing(false);
+      setIsUserAnalyzing(false); // 分析完成，恢复后台分析
       setCurrentView('result');
 
     } catch (error) {
       console.error('手动分析失败:', error);
-      setAnalysisError(error.message);
+      // 分析失败时，直接显示原内容，不弹窗报错
+      setAnalysisResult({
+        title: articleTitle,
+        url: articleUrl,
+        author: '手动导入',
+        summary: contentToAnalyze?.substring(0, 200) + '...' || '（无内容）',
+        viewpoints: ['（分析失败，仅显示原文内容）'],
+        quotes: [contentToAnalyze?.substring(0, 200) + '...' || ''],
+        concepts: [],
+        analyzedAt: null,
+        failed: true
+      });
+      setManualInputValue('');
       setIsProcessing(false);
-      setCurrentView('manual');
-      alert(`分析失败: ${error.message}`);
+      setIsUserAnalyzing(false); // 分析完成，恢复后台分析
+      setCurrentView('result');
     }
   };
 
@@ -2078,7 +2378,7 @@ const SkillAdminPanel = () => {
         id: Date.now(),
         content: noteContent,
         tags: noteTags.split(/[,，\s]+/).filter(t => t.trim()), // 提取标签
-        date: "刚刚"
+        date: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
       };
       setNotesHistory([newNote, ...notesHistory]);
 
@@ -2146,7 +2446,7 @@ const SkillAdminPanel = () => {
       id: Date.now(),
       content: readerNoteContent,
       tags: readerNoteTags.split(/[,，\s]+/).filter(t => t.trim()),
-      date: "刚刚",
+      date: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       sourceUrl: showOriginalUrl, // 关联来源文章
       source: analysisResult?.title || '未知来源', // 来源标题
       isExcerpt: noteModal.isExcerpt
@@ -2241,22 +2541,24 @@ const SkillAdminPanel = () => {
     setContextMenu({ visible: false, x: 0, y: 0, selectedText: '' });
   };
 
-  // 全局点击关闭右键菜单
+  // 全局点击关闭右键菜单和用户菜单
   useEffect(() => {
-    const handleGlobalClick = () => {
+    const handleGlobalClick = (e) => {
       if (contextMenu.visible) {
         setContextMenu({ visible: false, x: 0, y: 0, selectedText: '' });
+      }
+      // 点击外部关闭用户菜单
+      if (isUserMenuOpen && userMenuRef.current && !userMenuRef.current.contains(e.target)) {
+        setIsUserMenuOpen(false);
       }
     };
     document.addEventListener('click', handleGlobalClick);
     return () => document.removeEventListener('click', handleGlobalClick);
-  }, [contextMenu.visible]);
+  }, [contextMenu.visible, isUserMenuOpen]);
 
   // --- 生成AI洞察 ---
   const generateAiInsight = async (node) => {
-    if (!sparkApiKey) {
-      // 自动生成时不弹窗打扰，仅返回
-      // alert('请先在设置中配置 API Key');
+    if (!generalAiKey) {
       return;
     }
 
@@ -2290,14 +2592,14 @@ ${parentNode ? `【关联背景】：${parentNode.label}` : ''}
 
 请穿透这些表层信息，告诉我你看见了什么。`;
 
-      const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
+      const response = await fetch(`${generalAiBaseUrl.replace(/\/$/, '')}/v1/chat/completions`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${sparkApiKey}`,
+          'Authorization': `Bearer ${generalAiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'Qwen/Qwen2.5-7B-Instruct',
+          model: generalAiModel,
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 200,
           temperature: 0.7,
@@ -2447,7 +2749,7 @@ ${parentNode ? `【关联背景】：${parentNode.label}` : ''}
 
   // --- 发送AI对话消息 ---
   const sendNodeChatMessage = async () => {
-    if (!nodeChatInput.trim() || !sparkApiKey || !selectedNode) return;
+    if (!nodeChatInput.trim() || !generalAiKey || !selectedNode) return;
 
     const userMessage = nodeChatInput.trim();
     setNodeChatInput('');
@@ -2474,7 +2776,7 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
       const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${sparkApiKey}`,
+          'Authorization': `Bearer ${generalAiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -2560,14 +2862,84 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
               )}
             </div>
           </div>
-          <div className="p-4 border-t border-[#E8E1D6]">
-            <button
-              onClick={() => setIsSettingsOpen(true)}
-              className="flex items-center w-full px-3 py-2 text-[#6B5D4D] hover:bg-[#EDE8E0] hover:text-[#2C2416] rounded-lg transition-colors group"
+          <div ref={userMenuRef} className="p-4 border-t border-[#E8E1D6] relative">
+            {/* 用户菜单 Popover [NEW] */}
+            {isUserMenuOpen && (
+              <div className="absolute bottom-full left-4 right-4 mb-2 bg-white rounded-2xl shadow-2xl border border-[#E8E1D6] overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-4 duration-200">
+                {/* 菜单头部：个人资料 */}
+                <div className="p-4 flex items-center space-x-3 border-b border-[#F0EBE3] hover:bg-[#FAF9F6] transition-colors cursor-pointer group">
+                  <div className="w-10 h-10 rounded-full bg-[#C09464] flex items-center justify-center text-white font-bold shadow-sm">
+                    {loginStatus.isLoggedIn ? (loginStatus.nickname?.[0] || 'Y') : 'YA'}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold text-[#2C2416] truncate">
+                      {loginStatus.isLoggedIn ? loginStatus.nickname : '悦磊'}
+                    </div>
+                    <div className="text-[10px] text-[#9A8C7B]">
+                      {loginStatus.isLoggedIn ? 'WeChat 已登录' : '尚未登录微信'}
+                    </div>
+                  </div>
+                  <ChevronRight size={16} className="text-[#9A8C7B]" />
+                </div>
+
+                {/* 菜单列表 */}
+                <div className="py-2">
+                  {!loginStatus.isLoggedIn && (
+                    <a href={`${WECHAT_API_BASE}/admin.html`} target="_blank" className="flex items-center px-4 py-2 text-sm text-[#C09464] hover:bg-[#FDF9F3] transition-colors">
+                      <Sparkles size={16} className="mr-3" />
+                      <span>扫码登录微信</span>
+                    </a>
+                  )}
+                  <div className="flex items-center px-4 py-2 text-sm text-[#6B5D4D] hover:bg-[#FAF9F6] transition-colors cursor-pointer">
+                    <Zap size={16} className="mr-3 text-[#9A8C7B]" />
+                    <span>个性化</span>
+                  </div>
+                  <div className="flex items-center px-4 py-2 text-sm text-[#6B5D4D] hover:bg-[#FAF9F6] transition-colors cursor-pointer">
+                    <UserPlus size={16} className="mr-3 text-[#9A8C7B]" />
+                    <span>个人资料</span>
+                  </div>
+                  <div 
+                    onClick={() => { setIsSettingsOpen(true); setIsUserMenuOpen(false); }}
+                    className="flex items-center px-4 py-2 text-sm text-[#6B5D4D] hover:bg-[#FAF9F6] transition-colors cursor-pointer"
+                  >
+                    <Settings size={16} className="mr-3 text-[#9A8C7B]" />
+                    <span>设置</span>
+                  </div>
+                </div>
+
+                <div className="border-t border-[#F0EBE3] py-2">
+                  <div className="flex items-center px-4 py-2 text-sm text-[#6B5D4D] hover:bg-[#FAF9F6] transition-colors cursor-pointer">
+                    <HelpCircle size={16} className="mr-3 text-[#9A8C7B]" />
+                    <span>帮助</span>
+                    <ChevronRight size={14} className="ml-auto text-[#E8E1D6]" />
+                  </div>
+                  <div className="flex items-center px-4 py-2 text-sm text-[#C85A5A] hover:bg-[#FEF2F2] transition-colors cursor-pointer">
+                    <ArrowLeft size={16} className="mr-3" />
+                    <span>退出登录</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 用户头像触发按钮 [NEW] */}
+            <div 
+              onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+              className={`flex items-center p-2 rounded-xl transition-all cursor-pointer group ${isUserMenuOpen ? 'bg-[#EDE8E0]' : 'hover:bg-[#EDE8E0]'}`}
             >
-              <Settings size={18} className="mr-3 text-[#9A8C7B] group-hover:text-[#2C2416]" />
-              <span className="font-medium">设置</span>
-            </button>
+              <div className="w-10 h-10 rounded-lg bg-[#C09464] flex items-center justify-center text-white font-bold shadow-sm group-hover:scale-105 transition-transform">
+                {loginStatus.isLoggedIn ? (loginStatus.nickname?.[0] || 'Y') : 'YA'}
+              </div>
+              <div className="ml-3 flex-1 min-w-0">
+                <div className="text-sm font-bold text-[#2C2416] truncate">
+                  {loginStatus.isLoggedIn ? loginStatus.nickname : '悦磊'}
+                </div>
+                <div className="flex items-center text-[10px] text-[#9A8C7B]">
+                  <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${loginStatus.isLoggedIn ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+                  {loginStatus.isLoggedIn ? '在线' : '离线'}
+                </div>
+              </div>
+              <MoreHorizontal size={18} className="text-[#9A8C7B]" />
+            </div>
           </div>
         </div>
 
@@ -2692,25 +3064,35 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
                   filteredInboxItems.map((article) => (
                     <div
                       key={article.id}
-                      className="bg-white border border-[#E8E1D6] rounded-xl p-6 hover:shadow-lg transition-all duration-200 cursor-pointer group"
-                      onClick={() => handleInboxAnalyze(article)}
+                      className="bg-white border border-[#E8E1D6] rounded-xl p-5 hover:shadow-lg transition-all duration-200 cursor-pointer group flex gap-5"
+                      style={{ maxHeight: '170px', overflow: 'hidden' }}
+                      onClick={() => handleViewArticle(article)}
                     >
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-3 mb-2">
-                            {article.status === 'pending' && <div className="w-2 h-2 rounded-full bg-[#E5A853]"></div>}
-                            {article.status === 'analyzed' && <div className="w-2 h-2 rounded-full bg-[#7CAE7A]"></div>}
-                            <span className="text-sm font-medium text-[#6B5D4D]">{article.source}</span>
-                            <span className="text-xs text-[#B8A99A]">•</span>
-                            <span className="text-xs text-[#9A8C7B]">{article.date}</span>
-                          </div>
-                          <h3 className="text-lg font-semibold font-serif text-[#2C2416] mb-2 group-hover:text-[#C09464] transition-colors">
-                            {article.title}
-                          </h3>
-                          <p className="text-[#6B5D4D] text-sm leading-relaxed mb-3">
-                            {article.summary}
-                          </p>
-                          {/* 金句显示：优先使用缓存，其次使用文章字段 */}
+                      <div className="flex-1 flex flex-col min-w-0">
+                        <div className="flex items-center space-x-3 mb-2">
+                          <div className={`w-2 h-2 rounded-full ${
+                            article.status === 'analyzed' ? 'bg-[#7CAE7A]' : 
+                            article.status === 'pending' ? 'bg-[#E5A853]' : 'bg-[#9A8C7B]'
+                          }`}></div>
+                          <span className="text-sm font-medium text-[#6B5D4D]">{article.source}</span>
+                          <span className="text-xs text-[#B8A99A]">•</span>
+                          <span className="text-xs text-[#9A8C7B]">{article.date}</span>
+                        </div>
+                        
+                        <h3 className="text-lg font-semibold font-serif text-[#2C2416] mb-1 group-hover:text-[#C09464] transition-colors truncate">
+                          {article.title}
+                        </h3>
+                        
+                        <p className="text-[#6B5D4D] text-sm leading-relaxed mb-2 overflow-hidden" style={{
+                          display: '-webkit-box',
+                          WebkitLineClamp: 3,
+                          WebkitBoxOrient: 'vertical',
+                          maxHeight: '63px'
+                        }}>
+                          {article.summary.length > 180 ? article.summary.substring(0, 180) + '...' : article.summary}
+                        </p>
+
+                        <div className="mt-auto">
                           {(() => {
                             const cachedResult = analysisCache[article.id];
                             const displayQuote = cachedResult?.quotes?.[0] || article.quote;
@@ -2718,34 +3100,40 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
 
                             if (isAnalyzing) {
                               return (
-                                <div className="bg-[#FEF9E7] border-l-4 border-[#E5A853] p-3 rounded-r-lg">
-                                  <p className="text-[#A87D4F] text-sm flex items-center">
-                                    <span className="w-2 h-2 bg-[#E5A853] rounded-full animate-pulse mr-2"></span>
-                                    正在分析中...
-                                  </p>
+                                <div className="text-[#A87D4F] text-xs flex items-center">
+                                  <span className="w-1.5 h-1.5 bg-[#E5A853] rounded-full animate-pulse mr-2"></span>
+                                  分析中...
                                 </div>
                               );
                             }
 
-                            if (displayQuote && displayQuote !== '后台分析中...' && displayQuote !== '点击分析提取金句') {
+                            if (displayQuote && displayQuote !== '待分析') {
+                              // 稍微放宽金句长度限制
+                              const shortQuote = displayQuote.length > 100 ? displayQuote.substring(0, 100) + '...' : displayQuote;
                               return (
-                                <div className="bg-[#FAF7F2] border-l-4 border-[#C09464] p-3 rounded-r-lg">
-                                  <p className="text-[#6B5D4D] text-sm italic">"{displayQuote}"</p>
+                                <div className="border-l-2 border-[#C09464]/30 pl-3 py-0.5 mt-1">
+                                  <p className="text-[#846D4D] text-[12px] italic leading-relaxed">"{shortQuote}"</p>
                                 </div>
                               );
                             }
-
-                            return (
-                              <div className="bg-[#F5F1EB] border-l-4 border-[#D4C9BA] p-3 rounded-r-lg">
-                                <p className="text-[#9A8C7B] text-sm">点击查看 AI 分析</p>
-                              </div>
-                            );
+                            return null;
                           })()}
                         </div>
-                        <div className="flex items-center space-x-2 ml-4">
+                      </div>
 
-                          <ChevronRight size={20} className="text-[#B8A99A] group-hover:text-[#C09464] transition-colors" />
+                      {article.cover && (
+                        <div className="hidden sm:block flex-shrink-0 w-28 h-28 self-center rounded-lg overflow-hidden border border-[#F0EDE6] bg-[#FAF7F2]">
+                          <img 
+                            src={wechatService.getProxyImageUrl(article.cover)} 
+                            alt="" 
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                            loading="lazy"
+                          />
                         </div>
+                      )}
+                      
+                      <div className="flex flex-col items-center justify-center">
+                        <ChevronRight size={18} className="text-[#B8A99A] group-hover:translate-x-1 transition-transform group-hover:text-[#C09464]" />
                       </div>
                     </div>
                   ))
@@ -2772,20 +3160,18 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
               <div className="max-w-4xl mx-auto space-y-8">
 
 
-                {/* 文章基本信息 */}
+                {/* 文章基本信息 - 始终显示 */}
                 <div className="bg-white border border-[#E8E1D6] rounded-xl p-6 shadow-sm">
                   <div className="mb-4">
                     <h1 className="text-2xl font-bold font-serif text-[#2C2416] mb-2">{analysisResult.title}</h1>
                     <div className="flex items-center space-x-4 text-sm text-[#9A8C7B]">
                       <span>作者：{analysisResult.author}</span>
                       <span>•</span>
-                      {/* @USER_REQUEST: "点击原文链接，我不需要跳转，而是直接可以观看" */}
-                      {/* @USER_REQUEST: "不需要跳转到新的页面，直接在原有页面打开就可以了" */}
                       <button
                         onClick={() => {
                           setShowOriginalUrl(analysisResult.url);
-                          setPreviewHtml(null); // 重置预览状态
-                          setCurrentView('originalView'); // 切换到原文视图
+                          setPreviewHtml(null);
+                          setCurrentView('originalView');
                         }}
                         className="hover:text-[#C09464] transition-colors flex items-center cursor-pointer outline-none focus:outline-none"
                       >
@@ -2797,8 +3183,42 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
                   <p className="text-[#6B5D4D] leading-relaxed">{analysisResult.summary}</p>
                 </div>
 
-                {/* 1. 核心观点（第一位） */}
-                {analysisResult.viewpoints && analysisResult.viewpoints.length > 0 && (
+                {/* AI 分析结果区域 - 有内容时显示，无内容时显示占位符 */}
+                {(isProcessing || analysisResult.analyzing) ? (
+                  /* 分析中占位符 */
+                  <div className="space-y-6">
+                    {/* 核心观点占位 */}
+                    <div className="bg-white border border-[#E8E1D6] rounded-xl p-6 shadow-sm">
+                      <h3 className="text-lg font-semibold font-serif text-[#2C2416] mb-6 flex items-center">
+                        <Lightbulb size={20} className="mr-2 text-[#E5A853]" />
+                        核心观点
+                      </h3>
+                      <div className="flex items-center justify-center py-12">
+                        <div className="flex items-center space-x-3 text-[#9A8C7B]">
+                          <div className="w-3 h-3 bg-[#C09464] rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                          <div className="w-3 h-3 bg-[#C09464] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                          <div className="w-3 h-3 bg-[#C09464] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                          <span className="ml-2">{analysisProgress || 'AI 正在分析...'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {/* 金句占位 */}
+                    <div className="bg-white border border-[#E8E1D6] rounded-xl p-6 shadow-sm">
+                      <h3 className="text-lg font-semibold font-serif text-[#2C2416] mb-4 flex items-center">
+                        <Quote size={20} className="mr-2 text-[#C09464]" />
+                        金句摘录
+                      </h3>
+                      <div className="animate-pulse">
+                        <div className="h-4 bg-[#E8E1D6] rounded w-3/4 mb-2"></div>
+                        <div className="h-4 bg-[#E8E1D6] rounded w-1/2"></div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* 分析完成，显示结果 */
+                  <>
+                    {/* 1. 核心观点（第一位） */}
+                    {analysisResult.viewpoints && analysisResult.viewpoints.length > 0 && (
                   <div className="space-y-4">
                     <h3 className="text-lg font-semibold font-serif text-[#2C2416] mb-6 flex items-center">
                       <Lightbulb size={20} className="mr-2 text-[#E5A853]" />
@@ -2971,6 +3391,8 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
                       ))}
                     </div>
                   </div>
+                )}
+                  </>
                 )}
 
               </div>
@@ -3248,6 +3670,9 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
                           <feComposite in="SourceGraphic" in2="blur" operator="over" />
                         </filter>
                       </defs>
+                      
+                      {/* [NEW] 缩放容器 */}
+                      <g className="zoom-main">
 
                       {/* 连线层 */}
                       <g className="links transition-opacity duration-300">
@@ -3343,6 +3768,7 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
                           );
                         })}
                       </g>
+                      </g> {/* 结束 zoom-main */}
                     </svg>
 
                     {/* 图例浮层 */}
@@ -3706,86 +4132,151 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
         {
           isAddModalOpen && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-              <div className="bg-white border border-[#E8E1D6] rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
-                <div className="px-6 py-4 border-b border-[#E8E1D6] flex justify-between items-center">
-                  <h3 className="text-lg font-semibold font-serif text-[#2C2416]">添加新的订阅源</h3>
+              <div className="bg-white border border-[#E8E1D6] rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="px-6 py-4 border-b border-[#E8E1D6] flex justify-between items-center bg-[#FAF7F2]">
+                  <h3 className="text-lg font-semibold font-serif text-[#2C2416]">添加订阅源</h3>
                   <button
-                    onClick={() => setIsAddModalOpen(false)}
+                    onClick={() => {
+                      setIsAddModalOpen(false);
+                      setWechatSearchResults([]);
+                      setNewSubName('');
+                    }}
                     className="text-[#9A8C7B] hover:text-[#2C2416] transition-colors"
                   >
                     <X size={20} />
                   </button>
                 </div>
 
-                <div className="p-6 space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-[#6B5D4D] mb-2">
-                      名称 / 公众号名 <span className="text-[#C85A5A]">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={newSubName}
-                      onChange={(e) => setNewSubName(e.target.value)}
-                      placeholder="例如：L先生说"
-                      className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] placeholder-[#B8A99A] focus:ring-2 focus:ring-[#C09464] focus:border-[#C09464] outline-none transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-[#6B5D4D] mb-2">
-                      RSSHub 路由 / URL <span className="text-[#C85A5A]">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={newSubRss}
-                      onChange={(e) => setNewSubRss(e.target.value)}
-                      placeholder="/wechat/user/id"
-                      className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] placeholder-[#B8A99A] focus:ring-2 focus:ring-[#C09464] focus:border-[#C09464] outline-none transition-all font-mono text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-[#6B5D4D] mb-2">分类</label>
-                    <input
-                      type="text"
-                      value={newSubCategory}
-                      onChange={(e) => setNewSubCategory(e.target.value)}
-                      placeholder="输入或从下方选择..."
-                      className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] placeholder-[#B8A99A] focus:ring-2 focus:ring-[#C09464] focus:border-[#C09464] outline-none transition-all text-sm"
-                    />
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {['认知觉醒', '商业洞察', '科技', 'AI 工具', '个人成长'].map(cat => (
-                        <button
-                          key={cat}
-                          onClick={() => setNewSubCategory(cat)}
-                          className={`px-3 py-1 text-xs rounded-full border transition-colors ${newSubCategory === cat
-                            ? 'bg-[#C09464] text-white border-[#C09464]'
-                            : 'bg-[#F5F1EB] text-[#6B5D4D] border-[#E8E1D6] hover:bg-[#EDE8E0]'
-                            }`}
-                        >
-                          {cat}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="px-6 py-4 border-t border-[#E8E1D6] flex justify-end space-x-3">
+                {/* Tab 切换 */}
+                <div className="flex border-b border-[#E8E1D6] bg-white">
                   <button
-                    onClick={() => setIsAddModalOpen(false)}
-                    className="px-4 py-2 text-[#9A8C7B] hover:text-[#2C2416] font-medium text-sm transition-colors"
-                  >
-                    取消
-                  </button>
-                  <button
-                    onClick={handleAddSubscription}
-                    disabled={!newSubName || !newSubRss}
-                    className={`px-4 py-2 font-medium text-sm rounded-lg transition-all flex items-center ${!newSubName || !newSubRss
-                      ? 'bg-[#D4C9BA] text-[#9A8C7B] cursor-not-allowed'
-                      : 'bg-[#C09464] hover:bg-[#A87D4F] text-white'
+                    onClick={() => setActiveAddAddTab('wechat')}
+                    className={`flex-1 py-3 text-sm font-medium transition-all ${activeAddTab === 'wechat'
+                        ? 'text-[#C09464] border-b-2 border-[#C09464] bg-[#FEF9E7]'
+                        : 'text-[#9A8C7B] hover:text-[#6B5D4D] hover:bg-[#FAF7F2]'
                       }`}
                   >
-                    <Plus size={16} className="mr-1" />
-                    确认添加
+                    微信搜索
                   </button>
+                  <button
+                    onClick={() => setActiveAddAddTab('rss')}
+                    className={`flex-1 py-3 text-sm font-medium transition-all ${activeAddTab === 'rss'
+                        ? 'text-[#C09464] border-b-2 border-[#C09464] bg-[#FEF9E7]'
+                        : 'text-[#9A8C7B] hover:text-[#6B5D4D] hover:bg-[#FAF7F2]'
+                      }`}
+                  >
+                    手动 RSS
+                  </button>
+                </div>
+
+                <div className="p-6 overflow-y-auto">
+                  {activeAddTab === 'wechat' ? (
+                    <div className="space-y-4">
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#B8A99A]" />
+                          <input
+                            type="text"
+                            value={newSubName}
+                            onChange={(e) => setNewSubName(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSearchWechat()}
+                            placeholder="搜索公众号名称..."
+                            className="w-full pl-10 pr-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] placeholder-[#B8A99A] focus:ring-2 focus:ring-[#C09464] focus:border-[#C09464] outline-none"
+                          />
+                        </div>
+                        <button
+                          onClick={handleSearchWechat}
+                          disabled={isSearchingWechat || !newSubName.trim()}
+                          className="px-4 py-2 bg-[#C09464] hover:bg-[#A87D4F] disabled:bg-[#D4C9BA] text-white rounded-lg transition-colors flex items-center shadow-sm"
+                        >
+                          {isSearchingWechat ? <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" /> : '搜索'}
+                        </button>
+                      </div>
+
+                      {/* 搜索结果 */}
+                      <div className="space-y-3 pt-2">
+                        {isSearchingWechat ? (
+                          <div className="text-center py-8">
+                            <div className="animate-spin w-8 h-8 border-3 border-[#C09464] border-t-transparent rounded-full mx-auto mb-3" />
+                            <p className="text-sm text-[#9A8C7B]">正在从微信获取结果...</p>
+                          </div>
+                        ) : wechatSearchResults.length > 0 ? (
+                          wechatSearchResults.map((account) => (
+                            <div key={account.fakeid} className="flex items-center p-3 bg-[#FAF7F2] border border-[#E8E1D6] rounded-xl hover:border-[#C09464] transition-all group">
+                              <img
+                                src={wechatService.getProxyImageUrl(account.round_head_img)}
+                                alt={account.nickname}
+                                className="w-12 h-12 rounded-full border-2 border-white shadow-sm"
+                              />
+                              <div className="ml-4 flex-1">
+                                <h4 className="font-bold text-[#2C2416]">{account.nickname}</h4>
+                                <p className="text-xs text-[#9A8C7B]">微信号：{account.alias || '无'}</p>
+                              </div>
+                              <button
+                                onClick={() => handleQuickSubscribe(account)}
+                                disabled={isProcessing}
+                                className="px-4 py-1.5 bg-white border border-[#C09464] text-[#C09464] hover:bg-[#C09464] hover:text-white rounded-lg text-sm font-medium transition-all shadow-sm"
+                              >
+                                {isProcessing ? '处理中...' : '订阅'}
+                              </button>
+                            </div>
+                          ))
+                        ) : newSubName.trim() && !isSearchingWechat && (
+                          <div className="text-center py-8 text-[#9A8C7B]">
+                            <p className="text-sm">未找到相关公众号</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-[#6B5D4D] mb-2">
+                          名称 <span className="text-[#C85A5A]">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={newSubName}
+                          onChange={(e) => setNewSubName(e.target.value)}
+                          placeholder="例如：L先生说"
+                          className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] placeholder-[#B8A99A] focus:ring-2 focus:ring-[#C09464] focus:border-[#C09464] outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-[#6B5D4D] mb-2">
+                          RSS URL <span className="text-[#C85A5A]">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={newSubRss}
+                          onChange={(e) => setNewSubRss(e.target.value)}
+                          placeholder="https://..."
+                          className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] placeholder-[#B8A99A] focus:ring-2 focus:ring-[#C09464] focus:border-[#C09464] outline-none font-mono text-sm"
+                        />
+                      </div>
+                      <div className="pt-4">
+                        <button
+                          onClick={handleAddSubscription}
+                          disabled={!newSubName || !newSubRss}
+                          className={`w-full py-3 font-medium rounded-lg transition-all flex items-center justify-center ${!newSubName || !newSubRss
+                              ? 'bg-[#D4C9BA] text-[#9A8C7B] cursor-not-allowed'
+                              : 'bg-[#C09464] hover:bg-[#A87D4F] text-white shadow-md'
+                            }`}
+                        >
+                          <Plus size={18} className="mr-2" />
+                          确认添加
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="px-6 py-4 border-t border-[#E8E1D6] bg-[#FAF7F2] text-center">
+                  <p className="text-xs text-[#9A8C7B]">
+                    {activeAddTab === 'wechat' 
+                      ? '搜索公众号并订阅，系统将自动生成 RSS 路由并开始同步。' 
+                      : '手动输入 RSS 地址，系统将尝试验证并同步内容。'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -4156,17 +4647,76 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
                 </div>
 
                 <div className="p-6 space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-[#6B5D4D] mb-2">
-                      SiliconFlow API Key <span className="text-[#C85A5A]">*</span>
-                    </label>
-                    <input
-                      type="password"
-                      value={sparkApiKey}
-                      onChange={(e) => setSparkApiKey(e.target.value)}
-                      placeholder="sk-..."
-                      className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] placeholder-[#B8A99A] focus:ring-2 focus:ring-[#C09464] focus:border-[#C09464] outline-none transition-all font-mono text-sm"
-                    />
+                  <div className="space-y-4 border-b border-[#E8E1D6] pb-6">
+                    <h4 className="text-sm font-bold text-[#6B5D4D] flex items-center">
+                      <Zap size={14} className="mr-1" /> 文章分析配置 (DoroCli)
+                    </h4>
+                    <div>
+                      <label className="block text-xs font-medium text-[#9A8C7B] mb-1">API Key</label>
+                      <input
+                        type="password"
+                        value={articleAiKey}
+                        onChange={(e) => setArticleAiKey(e.target.value)}
+                        placeholder="sk-..."
+                        className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] font-mono text-xs outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-[#9A8C7B] mb-1">Base URL</label>
+                        <input
+                          type="text"
+                          value={articleAiBaseUrl}
+                          onChange={(e) => setArticleAiBaseUrl(e.target.value)}
+                          className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] font-mono text-xs outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-[#9A8C7B] mb-1">Model</label>
+                        <input
+                          type="text"
+                          value={articleAiModel}
+                          onChange={(e) => setArticleAiModel(e.target.value)}
+                          className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] font-mono text-xs outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 pt-2">
+                    <h4 className="text-sm font-bold text-[#6B5D4D] flex items-center">
+                      <Activity size={14} className="mr-1" /> 通用 AI 配置 (SiliconFlow)
+                    </h4>
+                    <div>
+                      <label className="block text-xs font-medium text-[#9A8C7B] mb-1">API Key</label>
+                      <input
+                        type="password"
+                        value={generalAiKey}
+                        onChange={(e) => setGeneralAiKey(e.target.value)}
+                        placeholder="sk-..."
+                        className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] font-mono text-xs outline-none"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-[#9A8C7B] mb-1">Base URL</label>
+                        <input
+                          type="text"
+                          value={generalAiBaseUrl}
+                          onChange={(e) => setGeneralAiBaseUrl(e.target.value)}
+                          className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] font-mono text-xs outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-[#9A8C7B] mb-1">Model</label>
+                        <input
+                          type="text"
+                          value={generalAiModel}
+                          onChange={(e) => setGeneralAiModel(e.target.value)}
+                          className="w-full px-4 py-2 bg-[#FAF7F2] border border-[#E8E1D6] rounded-lg text-[#2C2416] font-mono text-xs outline-none"
+                        />
+                      </div>
+                    </div>
                   </div>
 
                   <div className="p-4 bg-[#E3F2FD] border border-[#90CAF9] rounded-lg">
@@ -4184,7 +4734,7 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
                     </div>
                   </div>
 
-                  {sparkApiKey && (
+                  {generalAiKey && (
                     <div className="flex items-center space-x-2 text-[#558B2F] text-sm">
                       <Check size={16} />
                       <span>API Key 已配置</span>
@@ -4202,11 +4752,14 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
                   <button
                     onClick={() => {
                       // 保存到 localStorage
-                      localStorage.setItem('spark_api_key', sparkApiKey);
+                      localStorage.setItem('article_ai_key', articleAiKey);
+                      localStorage.setItem('article_ai_base_url', articleAiBaseUrl);
+                      localStorage.setItem('article_ai_model', articleAiModel);
+                      localStorage.setItem('general_ai_key', generalAiKey);
+                      localStorage.setItem('general_ai_base_url', generalAiBaseUrl);
+                      localStorage.setItem('general_ai_model', generalAiModel);
                       setIsSettingsOpen(false);
-                      if (sparkApiKey) {
-                        alert('API Key 已保存！现在可以使用 AI 分析功能了。');
-                      }
+                      alert('双路 AI 配置已保存！');
                     }}
                     className="px-4 py-2 font-medium text-sm rounded-lg transition-all flex items-center bg-[#C09464] hover:bg-[#A87D4F] text-white"
                   >
@@ -4667,4 +5220,6 @@ const StatCard = ({ label, value, icon, isError }) => (
   </div>
 );
 
+// 别名导出，确保与 main.jsx 的 import 匹配
+export const App = SkillAdminPanel;
 export default SkillAdminPanel;

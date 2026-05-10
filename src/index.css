@@ -395,6 +395,48 @@ select:focus {
   font-weight: 600;
 }
 
+/* =====================================================
+   微信文章深度净化 - 强制隐藏所有形式的头像、名片、评论区占位图
+   ===================================================== */
+
+/* 1. 拦截所有包含头像、个人信息特征的标签 (基于类名、属性、链接) */
+.original-article-content *[class*="avatar"],
+.original-article-content *[class*="profile"],
+.original-article-content *[class*="nickname"],
+.original-article-content *[class*="qrcode"],
+.original-article-content *[id*="profile"],
+.original-article-content *[id*="discuss"],
+.original-article-content *[src*="qlogo.cn"],
+.original-article-content *[src*="avatar"],
+.original-article-content *[src*="headimg"],
+.original-article-content *[src*="avatar_default.svg"],
+.original-article-content *[data-src*="avatar"],
+.original-article-content *[style*="qlogo.cn"],
+.original-article-content *[style*="avatar"],
+.original-article-content *[style*="headimg"],
+.original-article-content *[style*="avatar_default.svg"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  height: 0 !important;
+  width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* 2. 针对微信留言区的特定占位结构进行彻底封杀 */
+.discuss_container,
+.discuss_list,
+.discuss_form_avatar,
+.author_profile-info,
+.author_profile-info_avatar,
+.profile_avatar,
+.rich_media_extra,
+.js_profile_qrcode {
+  display: none !important;
+}
+
 /* 微信公众号特殊样式修复 */
 .original-article-content section {
   display: block;

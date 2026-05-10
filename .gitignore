@@ -102,3 +102,6 @@ dist
 
 # Dynamically generated files
 *.d.ts
+
+# Electron build artifacts
+dist_electron/
