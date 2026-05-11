@@ -105,3 +105,14 @@ dist
 
 # Electron build artifacts
 dist_electron/
+
+# Backend ignored files
+backend/venv/
+backend/__pycache__/
+backend/build/
+backend/dist/
+backend/data/
+backend/*.db
+backend/*.log
+backend/.env
+backend/static/qrcodes/*

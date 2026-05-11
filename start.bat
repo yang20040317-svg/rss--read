@@ -37,7 +37,7 @@ if %errorlevel% neq 0 (
 
 :: 获取当前目录
 set "PROJECT_DIR=%~dp0"
-set "WECHAT_API_DIR=D:\数据存储\wechat-download-api"
+set "WECHAT_API_DIR=%PROJECT_DIR%backend"
 
 :: ============================================
 :: 启动微信后端服务
