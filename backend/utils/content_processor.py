@@ -281,8 +281,9 @@ def is_valid_image_url(url: str) -> bool:
     if url.startswith('data:'):
         return False
     
-    # [NEW] 屏蔽头像域名和常见头像路径 (包括默认 SVG 头像)
-    blacklist = ['qlogo.cn', 'mmhead', 'headimg', 'avatar', 'qrcode', 'logo', 'icon', 'avatar_default.svg']
+    # [NEW] 屏蔽头像域名和常见头像路径 (进一步优化，避免误伤正文)
+    # 仅当 URL 明显是头像、二维码或图标时才过滤
+    blacklist = ['qlogo.cn', 'mmhead', 'headimg', 'avatar_default.svg', 'qrcode', 'js_profile_qrcode']
     if any(b in url.lower() for b in blacklist):
         return False
 

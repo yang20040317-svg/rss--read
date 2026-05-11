@@ -116,3 +116,5 @@ backend/*.db
 backend/*.log
 backend/.env
 backend/static/qrcodes/*
+
+backend.exe
