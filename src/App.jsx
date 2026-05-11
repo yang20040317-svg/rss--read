@@ -6,6 +6,7 @@ import {
   UserPlus, AlertCircle, AlertTriangle, Trash2, Edit2, Plus, X, Upload, Download, MoreHorizontal,
   Info, HelpCircle, ExternalLink, Filter, CheckSquare, Square, Search, Sparkles, ChevronRight, ChevronDown, ChevronUp, ArrowRight, AlignLeft, HelpCircle as QuestionIcon, ArrowLeft, Network, Share2, ZoomIn, ZoomOut, Maximize, StickyNote, Tag, AlignJustify
 } from 'lucide-react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 
 import { wechatService } from './services/wechatService';
 
@@ -5156,6 +5157,7 @@ ${parentNode ? `- 来源：${parentNode.label}` : ''}
 
 
       </div >
+    <SpeedInsights />
 
     </div >
 
